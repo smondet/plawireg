@@ -1,2 +1,12 @@
-# plawireg
-Play with The Reference Graph
+Plawireg: Play With The Reference Graph
+=======================================
+
+
+Build
+-----
+
+This project tries `obuild`:
+
+    obuild configure
+    obuild build
+
