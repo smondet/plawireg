@@ -1,0 +1,14 @@
+S ./src/lib
+S ./src/app/
+B ./dist/build/plawireg/
+B ./dist/build/lib-plawireg/
+PKG sosa
+PKG nonstd
+PKG docout
+PKG pvem
+PKG pvem_lwt_unix
+PKG cmdliner
+PKG uri
+PKG cohttp.lwt
+PKG ssl
+PKG conduit
