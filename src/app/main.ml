@@ -36,22 +36,71 @@ let generate_test_fasta ~path =
 
 let test_load files =
   let outline fmt = ksprintf (fun s -> printf "%s\n" s; return ()) fmt in
+  let print_stats msg =
+    printf "\n=== %s %s ===\nGC stats:\n" msg Plawireg.Time.(now () |> to_filename);
+    Gc.print_stat stdout;
+    IO.read_file "/proc/self/status"
+    >>= fun status ->
+    printf "\n/proc/self/status:\n%s\n%!" status;
+    return () in
   Deferred_list.while_sequential files ~f:(fun f ->
       Plawireg.Graph.create ()
       >>= fun graph ->
+      print_stats "before load_reference" >>= fun () ->
       Plawireg.Graph.load_reference graph f
       >>= fun () ->
-      Plawireg.Graph.fold graph ~init:(()) ~f:(fun () -> function
+      (*
+      let out = open_out "./datadumb.bin" in
+      Marshal.to_channel out graph [Marshal.No_sharing];
+      close_out out;
+      *)
+      printf "Roots:\n   %s\n%!"
+        (Plawireg.Graph.root_names graph |> String.concat ~sep:"\n   ");
+      Plawireg.Graph.count_nodes graph
+      >>= fun counts ->
+      let () =
+        printf "\nCounts:\n";
+        List.iter  counts (fun (name, count) ->
+            printf "* %s: %d nodes\n" name count
+          ) in
+      print_stats "before fold" >>= fun () ->
+      Plawireg.Graph.fold graph ~init:() ~f:(fun () -> function
         | `Name n -> outline "» %s" n
-        | `Node (id, kind, seq) ->
-          outline "  %s → %s"
-            (Plawireg.Unique_id.to_string id) (Plawireg.Sequence.to_string seq)
+        | `Node node ->
+          (* outline "  %s → %s" *)
+          (*   (Plawireg.Unique_id.to_string id) (Plawireg.Sequence.to_string seq) *)
+          return ()
         )
       >>= fun () ->
+      print_stats "before second fold" >>= fun () ->
+      Plawireg.Graph.fold graph ~init:([]) ~f:(fun prev -> function
+        | `Name n -> return (n :: prev)
+        | `Node node ->
+          Plawireg.Graph.expand_node graph node
+          >>= fun (id, kind, seq) ->
+          return (sprintf "%s → %s"
+                    (Plawireg.Unique_id.to_string id)
+                    (Plawireg.Sequence.to_string seq)
+                  :: prev)
+          (* outline "  %s → %s" *)
+          (*   (Plawireg.Unique_id.to_string id)  *)
+        )
+      >>= fun list_of_strings ->
+      let () =
+        printf "Names and Seqs:\n";
+        begin try
+          List.iteri (List.rev list_of_strings) ~f:(fun i x ->
+              if i > 100 then raise Not_found
+              else
+                printf "  %s\n" x)
+        with _ -> (printf "  ...\n")
+        end
+      in
+      print_stats "last one" >>= fun () ->
       return ())
   >>= fun (_ : unit list) ->
   return ()
-  
+
 let () =
   let to_do =
     match Sys.argv |> Array.to_list |> List.tl_exn with
@@ -59,6 +108,10 @@ let () =
       generate_test_fasta ~path
     | "test-load" :: files ->
       test_load files
+    | "test-uid" :: _ ->
+      printf "Test-UID:\n%!";
+      printf "- time: %f s\n%!" (Plawireg.Unique_id.test ());
+      return ()
     | other ->
       failwithf "Cannot understand: [%s]"
         (List.map other ~f:(sprintf "%S") |> String.concat ~sep:"; ")

@@ -33,58 +33,46 @@ module Unique_id : sig
   type t
   val create: unit -> t
   val to_string: t -> string
+  val test: unit -> float
 end = struct
-  type t = string
-  (** Create a fresh filename-compliant identifier. *)
+  type t = Int64.t
+
+  let circular_int = ref 0L
   let create () =
-    sprintf "%s_%09d" Time.(now () |> to_filename) (Random.int 1_000_000_000)
-  let to_string s = s
-end
+    (* we take a piece of 
+       the mantissa (bits 51 to 0) of the current time 
+       and stick an increasing number to its right *)
+    let now = Unix.gettimeofday () in
+    let shift_size = 24 in
+    Int64.(
+      let to_add = !circular_int in
+      let () =
+        circular_int :=
+          rem (add !circular_int 1L) (shift_left 1L (shift_size + 1)) in
+      add
+        (shift_left (bits_of_float now) shift_size)
+        to_add
+    )
 
-module Base = struct
-  type t =  A | C | G | T | N
-  let of_char_exn = function
-  | 'A' -> A
-  | 'C' -> C
-  | 'G' -> G
-  | 'T' -> T
-  | 'N' -> N
-  | other -> failwithf "Invalid Base.of_char_exn: %c" other
-  let to_char = function
-  | A -> 'A'
-  | C -> 'C'
-  | G -> 'G'
-  | T -> 'T'
-  | N -> 'N'
-end
-module Sequence = struct
-  type t = Base.t array
-  let of_string_exn s =
-    let a = Array.make (String.length s) Base.N in
-    let _ =
-      String.fold ~init:0 s
-        ~f:(fun prev c -> Array.set a prev (Base.of_char_exn c); prev + 1)
-    in
-    a
-  let to_string a =
-    let s = Buffer.create 42 in
-    Array.iter a ~f:(fun c -> Buffer.add_char s (Base.to_char c));
-    Buffer.contents s
+  let to_string s = sprintf "0x%Lx" s
 
+  let test () =
+    circular_int := 0L;
+    let start = Unix.gettimeofday () in
+    let first = create () in
+    while !circular_int <> 0L do
+      if create () = first then
+        failwithf "got %s again" (to_string first)
+      else
+        ()
+    done;
+    let the_end = Unix.gettimeofday () in
+    (the_end -. start)
 end
 module Pointer = struct
   type id = Unique_id.t
   type 'a t = {id : id}
   let create id = {id}
-end
-module Node = struct
-  type t = {
-    id: Pointer.id;
-    kind: [ `Reference | `Db_snp of string | `Cosmic of string ];
-    base : Sequence.t Pointer.t;
-    next: t Pointer.t array;
-  }
-  let pointer t = Pointer.create t.id
 end
 module Cache = struct
   type 'a t = (Pointer.id, 'a) Hashtbl.t
@@ -104,6 +92,26 @@ module Cache = struct
       sprintf "Data-not-found at: %S" (Unique_id.to_string id)
   end
 end
+
+module Sequence: sig
+  type t
+  val of_string_exn: string -> t
+  val to_string: t -> string
+end = struct
+  type t = string
+  let of_string_exn s = s
+  let to_string a = a
+end
+module Node = struct
+  type t = {
+    id: Pointer.id;
+    kind: [ `Reference | `Db_snp of string | `Cosmic of string ];
+    sequence: Sequence.t Pointer.t;
+    next: t Pointer.t array;
+    parent: t Pointer.t option;
+  }
+  let pointer t = Pointer.create t.id
+end
 module Graph = struct
   type t = {
     sequences: Sequence.t Cache.t;
@@ -114,6 +122,78 @@ module Graph = struct
     let nodes = Cache.create () in
     let sequences = Cache.create () in
     return {sequences; nodes; roots = []}
+
+  let root_names t =
+    List.map t.roots ~f:fst
+
+  let roots t = t.roots
+
+  let stream_of_node_pointer t node_p =
+    let stack_of_nodes = ref [node_p] in
+    (fun () ->
+       let open Node in
+       begin match !stack_of_nodes with
+       | node_p :: more ->
+         Cache.get t.nodes node_p.Pointer.id
+         >>= fun node ->
+         (* inline implementation of a reverse-append-array-to-stack-list: *)
+         stack_of_nodes := more;
+         for i = Array.length node.next - 1 downto 0 do
+           stack_of_nodes := node.next.(i) :: !stack_of_nodes
+         done;
+         return (Some node)
+       | [] -> return None
+       end)
+
+  let stream_of_root t ~name = 
+    match List.find t.roots ~f:(fun (n, _) -> n = name) with
+    | None
+    | Some (_, None) -> (fun () -> return None)
+    | Some (_, Some node_p) ->
+      stream_of_node_pointer t node_p
+
+  let count_nodes t =
+    List.fold ~init:(return []) t.roots ~f:(fun prev root ->
+        prev >>= fun prev_list ->
+        match root with
+        | (name, None) -> return ((name, 0) :: prev_list)
+        | (name, Some np) -> 
+          let stream = stream_of_node_pointer t np in
+          let c = ref 0 in
+          let rec count () =
+            stream () >>= function
+            | Some node -> incr c; count ()
+            | None -> return ()
+          in
+          count ()
+          >>= fun () ->
+          return ((name, !c) :: prev_list))
+
+  let fold t ~init ~f =
+    List.fold ~init:(return init) t.roots ~f:(fun prev root ->
+        prev >>= fun prev ->
+        match root with
+        | (name, None) -> f prev (`Name name)
+        | (name, Some np) -> 
+          f prev (`Name name)
+          >>= fun next ->
+          let stream = stream_of_node_pointer t np in
+          let c = ref 0 in
+          let rec go current =
+            stream () >>= function
+            | Some node ->
+              f current (`Node node)
+              >>= fun next ->
+              go next
+            | None -> return current
+          in
+          go next)
+
+  let expand_node t ~node =
+    let open Node in
+    Cache.get t.sequences node.sequence.Pointer.id
+    >>= fun sequence ->
+    return (node.id, node.kind, sequence)
 
   let fold_lines path ~on_exn ~init ~f : (_, _) Deferred_result.t  =
     let stream = Lwt_io.lines_of_file path in
@@ -133,7 +213,7 @@ module Graph = struct
     fun t ~path ->
       (* let next_id = ref (Unique_id.create ()) in *)
       (* let current_root = ref None in *)
-      let node_of_line line =
+      let node_of_line ?parent line =
         begin match Sequence.of_string_exn line with
         | s -> return s
         | exception e -> fail (`Graph (`Load_fasta (path, e)))
@@ -145,11 +225,12 @@ module Graph = struct
         let node_id = Unique_id.create () in
         let node = {Node. id = node_id;
                     kind = `Reference;
-                    base = {Pointer.id = sequence_id};
-                    next = [|  |] } in
+                    sequence = {Pointer.id = sequence_id};
+                    next = [|  |];
+                    parent;} in
         return node in
       fold_lines path ~init:(`None) ~f:(fun prev line ->
-          dbg "line: %S" line;
+          (* dbg "line: %S" line; *)
           match prev, line with
           | `None, line when String.get line 0 = Some '>' ->
             let root_name =
@@ -164,7 +245,7 @@ module Graph = struct
             return (`New_name root_name)
           | `New_name n, line ->
             (* first node of the new root *)
-            node_of_line line
+            node_of_line ?parent:None line
             >>= fun node ->
             t.roots <- t.roots @ [n, Some (Node.pointer node)];
             return (`Node node)
@@ -175,7 +256,7 @@ module Graph = struct
               String.(sub_exn line ~index:1 ~length:(length line - 1)) in
             return (`New_name root_name)
           | `Node node, line ->
-            node_of_line line
+            node_of_line ~parent:(Node.pointer node) line
             >>= fun (new_node) ->
             let to_store =
               {node with Node.next = [| Node.pointer new_node |] } in
@@ -194,26 +275,6 @@ module Graph = struct
   let add_vcf: t -> path:string -> unit =
     fun t ~path ->
       assert false
-
-  let fold t ~init ~f =
-    let rec visit_node_pointer to_fold node_p =
-      Cache.get t.nodes node_p.Pointer.id
-      >>= fun node ->
-      Cache.get t.sequences node.Node.base.Pointer.id
-      >>= fun seq ->
-      f to_fold (`Node Node.(node.id, node.kind, seq))
-      >>= fun next ->
-      Array.fold_left node.Node.next ~init:(return next) ~f:(fun prev p ->
-          prev >>= fun to_fold ->
-          visit_node_pointer to_fold p)
-    in
-    List.fold ~init:(return init) t.roots ~f:(fun prev_m (name, node_p) ->
-        prev_m >>= fun prev ->
-        f prev (`Name name)
-        >>= fun next ->
-        match node_p with
-        | None -> return prev
-        | Some np -> visit_node_pointer next np)
 
   module Error = struct
     let to_string = function
