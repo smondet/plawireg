@@ -29,11 +29,16 @@ end
 
 
 (** Provide pseudo-unique identifiers. *)
-module Unique_id = struct
+module Unique_id : sig
+  type t
+  val create: unit -> t
+  val to_string: t -> string
+end = struct
   type t = string
   (** Create a fresh filename-compliant identifier. *)
   let create () =
     sprintf "%s_%09d" Time.(now () |> to_filename) (Random.int 1_000_000_000)
+  let to_string s = s
 end
 
 module Base = struct
@@ -96,7 +101,7 @@ module Cache = struct
   module Error = struct
     let to_string = function
     | `Not_found id ->
-      sprintf "Data-not-found at: %S" id
+      sprintf "Data-not-found at: %S" (Unique_id.to_string id)
   end
 end
 module Graph = struct

@@ -44,7 +44,8 @@ let test_load files =
       Plawireg.Graph.fold graph ~init:(()) ~f:(fun () -> function
         | `Name n -> outline "» %s" n
         | `Node (id, kind, seq) ->
-          outline "  %s → %s" id (Plawireg.Sequence.to_string seq)
+          outline "  %s → %s"
+            (Plawireg.Unique_id.to_string id) (Plawireg.Sequence.to_string seq)
         )
       >>= fun () ->
       return ())
