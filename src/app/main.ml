@@ -13,26 +13,54 @@ module Error = struct
   | `IO _ as e -> IO.error_to_string e
 end
 
-let generate_test_fasta ~path =
+let write_lines ~path l =
   let content =
-    String.concat ~sep:"" (List.map ~f:(sprintf "%s\n") [
-        ">1 bla bla";
-        "NNNNNNNNNN";
-        "NNNNNNNNNN";
-        "NNNNNNNNNN";
-        "ACGTCNTNTC";
-        "CAGCNTNNTC";
-        "CCACGCCTCC";
-        "CCACGCCTCC";
-        "CCAGCCCCTC";
-        ">2 bla bla";
-        ">3 bla bla";
-        "ACGTCNTNTC";
-        "CAGCNTNNTC";
-        "CCACGCCTCC";
-        "NNNNNNNNNN";
-      ]) in
+    String.concat ~sep:"" (List.map ~f:(sprintf "%s\n") l) in
   IO.write_file path ~content
+
+let generate_test_fasta ~path =
+  write_lines ~path [
+    ">1 bla bla";
+    "NNNNNNNNNN";
+    "NNNNNNNNNN";
+    "NNNNNNNNNN";
+    "ACGTCNTNTC";
+    "CAGCNTNNTC";
+    "CCACGCCTCC";
+    "CCACGCCTCC";
+    "CCAGCCCCTC";
+    ">2 bla bla";
+    ">3 bla bla";
+    "ACGTCNTNTC";
+    "CAGCNTNNTC";
+    "CCACGCCTCC";
+    "NNNNNNNNNN";
+  ]
+
+let generate_test_dbnsp ~path =
+  let tabify l = String.concat ~sep:"\t" l in
+  let variant ?info chr pos ?name refer alt =
+    tabify [
+      Int.to_string chr;
+      Int.to_string pos;
+      Option.value name ~default:(sprintf "rs%d-%d" chr pos);
+      refer;
+      alt;
+      ".";
+      ".";
+      Option.value info ~default:"SOME=RANDOM;GARBAGE=42";
+    ] in
+  write_lines ~path [
+    "# comment stuf";
+    "# comment stuf";
+    "# comment stuf";
+    tabify ["#CHROM"; "POS"; "ID"; "REF"; "ALT"; "QUAL"; "FILTER"; "INFO"];
+    variant 1 4 "N" "ACGT";
+    variant 1 9 "N" "AC,GT";
+    variant 3 4 "T" "A" ~info:"CAF=[0.9,.01]";
+    variant 3 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
+    variant 3 6 "NTN" "N";
+  ]
 
 let test_load files =
   let outline fmt = ksprintf (fun s -> printf "%s\n" s; return ()) fmt in
@@ -125,8 +153,12 @@ let test_load files =
 let () =
   let to_do =
     match Sys.argv |> Array.to_list |> List.tl_exn with
-    | "generate" :: "test" :: "fasta" :: path :: [] ->
-      generate_test_fasta ~path
+    | "generate" :: "test" :: file_kind :: path :: [] ->
+      begin match file_kind with
+      | "fasta" -> generate_test_fasta ~path
+      | "dbsnp" -> generate_test_dbnsp ~path
+      | other -> failwithf "Unknown file-kind to generate"
+      end
     | "test-load" :: files ->
       test_load files
     | "test-uid" :: _ ->
