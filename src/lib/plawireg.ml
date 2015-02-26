@@ -178,7 +178,6 @@ module Graph = struct
           f prev (`Name name)
           >>= fun next ->
           let stream = stream_of_node_pointer t np in
-          let c = ref 0 in
           let rec go current =
             stream () >>= function
             | Some node ->
