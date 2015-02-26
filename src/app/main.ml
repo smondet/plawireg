@@ -96,6 +96,27 @@ let test_load files =
         with _ -> (printf "  ...\n")
         end
       in
+      let base_counts = Hashtbl.create 42 in
+      Plawireg.Graph.fold graph ~init:"" ~f:(fun name -> function
+        | `Name n -> Hashtbl.add base_counts n (Hashtbl.create 42); return n
+        | `Node node ->
+          Plawireg.Graph.expand_node graph node
+          >>= fun (id, kind, seq) ->
+          let () =
+            String.iter (Plawireg.Sequence.to_string seq) ~f:(fun c ->
+                let ht = Hashtbl.find base_counts name in
+                match Hashtbl.find ht c with
+                | v -> incr v
+                | exception e -> Hashtbl.add ht c (ref 1))
+          in
+          return name)
+      >>= fun (_ : string) ->
+      printf "\nSome Stats:\n%!";
+      let disp chr ht =
+        printf "- %s:\n" chr;
+        Hashtbl.iter (fun c cr -> printf "  %c\t%d\n" c !cr) ht
+      in
+      Hashtbl.iter disp base_counts;
       print_stats "last one" >>= fun () ->
       return ())
   >>= fun (_ : unit list) ->
