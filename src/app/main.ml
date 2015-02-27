@@ -173,8 +173,9 @@ let () =
       | "dbsnp" -> generate_test_dbnsp ~path
       | other -> failwithf "Unknown file-kind to generate"
       end
-    | "test-load" :: fasta :: dbsnp :: [] ->
-      test_load ~verbose:false ~fasta ~dbsnp
+    | "test-load" :: fasta :: dbsnp :: more ->
+      let verbose = List.mem ~set:more "verbose" in
+      test_load ~verbose ~fasta ~dbsnp
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Plawireg.Unique_id.test ());
