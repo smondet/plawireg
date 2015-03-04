@@ -102,40 +102,21 @@ module Cache = struct
 end
 
 module Sequence: sig
-  type t
+  type t (* 1-based pseudo-strings *)
   val of_string_exn: string -> t
   val to_string: t -> string
   val length: t -> int
+
+  val split_exn: t -> before:int -> (t * t)
+  (** In Vim: i^M :) *)
 end = struct
   type t = string
   let of_string_exn s = s
   let to_string a = a
   let length = String.length
-end
-module Node = struct
-  type t = {
-    id: Pointer.id;
-    kind: [ `Reference | `Db_snp of string | `Cosmic of string ];
-    sequence: Sequence.t Pointer.t;
-    next: t Pointer.t array;
-    prev: t Pointer.t array;
-  }
-  let pointer t = Pointer.create t.id
-  let to_string { id; kind; sequence; next; prev } =
-    let of_array name arr =
-      match Array.to_list arr with
-       | [] -> "no-" ^ name
-       | a ->
-         name ^ ":" ^ String.concat ~sep:"," (List.map ~f:Pointer.to_string a)
-    in
-    sprintf "{%s: %s (%s, %s)}"
-      (Unique_id.to_string id)
-      (match kind with
-       | `Db_snp s -> sprintf "DB:%s" s
-       | `Reference -> sprintf "Ref"
-       | `Cosmic s -> sprintf "DB:%s" s)
-      (of_array "next" next)
-      (of_array "prev" prev)
+  let split_exn s ~before =
+    (String.sub_exn s ~index:0 ~length:(before - 1),
+     String.sub_exn s ~index:(before - 1) ~length:(String.length s - before +  1))
 end
 module Variant = struct
   type t = {
@@ -207,6 +188,31 @@ module Variant = struct
     in
     variants
 
+end
+module Node = struct
+  type t = {
+    id: Pointer.id;
+    kind: [ `Reference | `Db_snp of Variant.t | `Cosmic of string ];
+    sequence: Sequence.t Pointer.t;
+    next: t Pointer.t array;
+    prev: t Pointer.t array;
+  }
+  let pointer t = Pointer.create t.id
+  let to_string { id; kind; sequence; next; prev } =
+    let of_array name arr =
+      match Array.to_list arr with
+       | [] -> "no-" ^ name
+       | a ->
+         name ^ ":" ^ String.concat ~sep:"," (List.map ~f:Pointer.to_string a)
+    in
+    sprintf "{%s: %s (%s, %s)}"
+      (Unique_id.to_string id)
+      (match kind with
+       | `Db_snp s -> sprintf "DB:%s" (Variant.to_string s)
+       | `Reference -> sprintf "Ref"
+       | `Cosmic s -> sprintf "DB:%s" s)
+      (of_array "next" next)
+      (of_array "prev" prev)
 end
 module Graph = struct
   type root_key = {chromosome: string; comment: string}
@@ -334,7 +340,7 @@ module Graph = struct
     let node_id = Unique_id.create () in
     let node = {
       Node. id = node_id;
-      kind = `Reference;
+      kind;
       sequence = {Pointer.id = sequence_id};
       next;
       prev;
@@ -442,27 +448,105 @@ module Graph = struct
     | Some n -> return n
     | None -> fail (`Graph (`Node_not_found (chromosome, position)))
 
-  let insert_node t ~split ~at ~new_path ~kind =
-    match at with
-    | 1 ->
-      (*
-         - add new child
-         - find node corresponding the end of new_path
-         - reonnect end of the new path to that one
-           (potentially insert another node)
-      *)
-      return ()
-    | _ ->
-      (* change sequence of split
-      *)
-      return ()
-
-  let get_parent_nodes t ~node =
+  let get_reference_parent t ~node =
     Array.fold_left ~init:(return []) node.Node.prev ~f:(fun l_m pointer ->
         l_m >>= fun l ->
         Cache.get t.nodes (pointer.Pointer.id)
         >>= fun parent ->
-        return (parent :: l))
+        begin match parent.Node.kind with
+        | `Db_snp _
+        | `Cosmic _ -> return l
+        | `Reference ->
+          return (parent :: l)
+        end)
+    >>= function
+    | [] -> return None
+    | s :: [] -> return (Some s)
+    | more -> failwithf "Node %s has too many reference-parents: [%s]!"
+                (Node.to_string node)
+                (List.map more ~f:Node.to_string |> String.concat ~sep:", ")
+
+  let insert_node_before_reference t ~reference_node ~sequence ~variant =
+    (* insert from there:
+       - find reference-parent of reference_node
+       - parents.next += new_node
+       - new_node.parent = parents
+       - reference_node.parents += new_node
+       - new_node.next = reference_node
+    *)
+    let open Node in
+    get_reference_parent t ~node:reference_node
+    >>= fun parent_opt ->
+    store_new_sequence t ~sequence
+    >>= fun sequence_id ->
+    let new_node =
+      let next = [| Node.pointer reference_node |] in
+      let prev =
+        Option.value_map parent_opt ~f:(fun p -> [| pointer p |]) ~default:[| |]
+      in
+      new_node t ~kind:(`Db_snp variant) ~sequence_id ~next ~prev
+    in
+    babble "New node: %s\n   goes before %s"
+      (Node.to_string new_node) (Node.to_string reference_node);
+    Cache.store t.nodes ~at:new_node.id ~value:new_node
+    >>= fun () ->
+    begin match parent_opt with
+    | None  -> return ()
+    | Some parent ->
+      let value =
+        {parent with
+         next = Array.concat [parent.next; [| pointer new_node |] ]}
+      in
+      babble "Updated parent: %s" (Node.to_string value);
+      Cache.store t.nodes ~at:parent.id ~value
+    end
+    >>= fun () ->
+    Cache.store t.nodes ~at:reference_node.id
+      ~value:
+        {reference_node with
+         prev = Array.concat [reference_node.prev; [| pointer new_node |] ]}
+
+  let split_reference_node t ~reference_node ~reference_sequence ~index =
+        (*
+           - split the reference_node in two
+               - new_node: seq: after, prev: ref_node, child: = refnode.children
+               - reference_node.seq = prefix
+               - replace prev in child of reference_node: (prev 
+        *)
+    let before, after = Sequence.split_exn reference_sequence ~before:index in
+    store_new_sequence t ~sequence:before
+    >>= fun before_sequence_id ->
+    store_new_sequence t ~sequence:after
+    >>= fun after_sequence_id ->
+    let new_ref_node =
+      let next = Array.copy reference_node.Node.next in
+      let prev = [| Node.pointer reference_node |] (* + ins_node *) in
+      new_node t ~kind:`Reference ~sequence_id:after_sequence_id ~next ~prev
+    in
+    let open Node in
+    babble "New ref node: %s" (Node.to_string new_ref_node);
+    Cache.store t.nodes ~at:new_ref_node.id ~value:new_ref_node
+    >>= fun () ->
+    (* Delete old sequence? *)
+    Cache.store t.nodes ~at:reference_node.id
+      ~value:
+        {reference_node with
+         sequence = Pointer.create before_sequence_id;
+         next = [| Node.pointer new_ref_node |]}
+    >>= fun () ->
+    Array.fold_left reference_node.next ~init:(return ())
+      ~f:(fun unitm child ->
+          unitm >>= fun () ->
+          Cache.get t.nodes child.Pointer.id
+          >>= fun child_node ->
+          let prev =
+            Array.map child_node.prev ~f:(fun pointer ->
+                if pointer.Pointer.id = reference_node.id
+                then Pointer.create new_ref_node.id
+                else pointer) in
+          Cache.store t.nodes ~at:child_node.id ~value:{child_node with prev})
+    >>= fun () ->
+    return new_ref_node
 
   let integrate_variant t  ~variant =
     (* TODO *)
@@ -471,45 +555,19 @@ module Graph = struct
     | `Insert ins ->
       (* find node, split there if needed, insert new path *)
       find_reference_node t ~chromosome ~position
-      >>= fun  (node, index, seq) ->
+      >>= fun  (reference_node, index, seq) ->
       babble "Integrating in %s (+%d %S)"
-        (Node.to_string node) index (Sequence.to_string seq);
+        (Node.to_string reference_node) index (Sequence.to_string seq);
       begin match index with
       | 1 ->
-        (* insert from there:
-           - find parents of node
-           - parents.next += new_node
-           - new_node.parent = parents
-           - node.parents += new_node
-           - new_node.next = node
-        *)
-        get_parent_nodes t ~node
-        >>= fun parents ->
-        store_new_sequence t ~sequence:ins
-        >>= fun sequence_id ->
-        let new_node =
-          let next = [| Node.pointer node |] in
-          let prev = Array.copy node.Node.prev in
-          new_node t ~kind:(`Db_snp "dbsnp-todo") ~sequence_id ~next ~prev
-        in
-        babble "New node: %s" (Node.to_string new_node);
-        let open Node in
-        Cache.store t.nodes ~at:new_node.id ~value:new_node
-        >>= fun () ->
-        List.fold parents ~init:(return ()) ~f:(fun unitm parent ->
-            unitm
-            >>= fun () ->
-            let value =
-              {parent with
-               next = Array.concat [parent.next; [| pointer new_node |] ]}
-            in
-            babble "Updated parent: %s" (Node.to_string value);
-            Cache.store t.nodes ~at:parent.id ~value)
-        >>= fun () ->
-        Cache.store t.nodes ~at:node.id
-          ~value:
-            {node with prev = Array.concat [node.prev; [| pointer new_node |] ]}
+        insert_node_before_reference t ~reference_node ~sequence:ins ~variant
       | _ ->
+        split_reference_node t ~reference_node ~index
+          ~reference_sequence:seq
+        >>= fun new_ref_node ->
+        insert_node_before_reference
+          t ~reference_node:new_ref_node ~sequence:ins ~variant
+        >>= fun () ->
         return ()
       end
     | `Delete _
