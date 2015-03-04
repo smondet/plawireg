@@ -68,7 +68,6 @@ let generate_test_dbnsp ~path =
   ]
 
 let test_load ~memory_stats ~fasta ~dbsnp =
-  let outline fmt = ksprintf (fun s -> printf "%s\n" s; return ()) fmt in
   let print_stats msg =
     if memory_stats then
       begin
@@ -101,15 +100,50 @@ let test_load ~memory_stats ~fasta ~dbsnp =
     List.iter  counts (fun (name, count) ->
         printf "* %s: %d nodes\n" name.Plawireg.Graph.chromosome count
       ) in
-  print_stats "before fold" >>= fun () ->
-  Plawireg.Graph.fold graph ~init:() ~f:(fun () -> function
-    | `Name n -> outline "» %s" n.Plawireg.Graph.chromosome
-    | `Node node when verbose ->
-      outline "Node: %s" (Plawireg.Node.to_string node);
-    | `Node node -> return ()
-    )
+  begin
+    if verbose then
+      print_stats "before outputting .dot file" >>= fun () ->
+      let o = open_out "out.dot" in
+      fprintf o "digraph refgraph {\n";
+      Plawireg.Graph.fold graph ~init:false ~f:(fun in_subgraph -> function
+        | `Name { Plawireg.Graph. chromosome; comment } ->
+          (if in_subgraph then fprintf o "}\n");
+          fprintf o "subgraph cluster%s {" chromosome;
+          fprintf o "  label=\"%s (%s)\"" chromosome comment;
+          return true
+        | `Node node ->
+          let open Plawireg.Node in
+          let id = Plawireg.Unique_id.to_string in
+          let seq = Plawireg.Sequence.to_string in
+          Plawireg.Graph.expand_node graph node
+          >>= fun (_, _, sequence) ->
+          let shape, comment =
+            match node.kind with
+            | `Db_snp comment ->
+              ("doubleoctagon", Plawireg.Variant.to_string comment)
+            | `Reference -> "box", "B37"
+            | `Cosmic cm -> "diamond", cm
+          in
+          let label = sprintf "\"%s (%s)\"" (seq sequence) comment in
+          fprintf o "N_%s [label=%S,shape=%s];\n"
+            (id node.id) label shape;
+          Array.iter node.next ~f:(fun {Plawireg.Pointer. id = child} ->
+              fprintf o "N_%s -> N_%s[color=red];\n" (id node.id) (id child);
+            );
+          Array.iter node.prev ~f:(fun {Plawireg.Pointer. id = parent} ->
+              fprintf o "N_%s -> N_%s[color=blue];\n" (id node.id) (id parent);
+            );
+          return in_subgraph
+        )
+      >>= fun in_subgraph ->
+      (if in_subgraph then fprintf o "}\n");
+      fprintf o "}\n";
+      close_out o;
+      print_stats "before second fold"
+    else
+      print_stats "before first fold"
+  end
   >>= fun () ->
-  print_stats "before second fold" >>= fun () ->
   Plawireg.Graph.fold graph ~init:([]) ~f:(fun prev -> function
     | `Name n -> return (n.Plawireg.Graph.chromosome :: prev)
     | `Node node ->
