@@ -137,12 +137,13 @@ module Variant = struct
   let delete ~name ~at nb = create ~name ~position:at (`Delete nb)
 
   let to_string {name; position = (chr, pos); action} =
-    sprintf "{%s@%s:%d|%s}" name chr pos
+    sprintf "{%s:%s@%s:%d}" name
       (match action with
       | `Replace (a, b) ->
         sprintf "s/%S/%S" (Sequence.to_string a) (Sequence.to_string b)
       | `Insert (s) -> sprintf "i/%S" (Sequence.to_string s)
       | `Delete (nb) -> sprintf "%d/d" nb)
+      chr pos
 
   let of_vcf_row_exn row =
     let columns = String.split ~on:(`Character '\t') row in
