@@ -122,25 +122,27 @@ end = struct
 end
 module Variant = struct
   type t = {
+    name: string;
     position: string * int;
     action: [
       | `Replace of Sequence.t * Sequence.t
       | `Delete of int
       | `Insert of Sequence.t
-    ]}
-  let create ~position action = {position; action}
-  let replace ~at (ref, alt) =
-    create ~position:at (`Replace (ref, alt))
-  let insert ~at alt = create ~position:at (`Insert alt)
-  let delete ~at nb = create ~position:at (`Delete nb)
+    ];
+  }
+  let create ~name ~position action = {name; position; action}
+  let replace ~name ~at (ref, alt) =
+    create ~name ~position:at (`Replace (ref, alt))
+  let insert ~name ~at alt = create ~name ~position:at (`Insert alt)
+  let delete ~name ~at nb = create ~name ~position:at (`Delete nb)
 
-  let to_string {position = (chr, pos); action} =
-    match action with
-    | `Replace (a, b) ->
-      sprintf "%s:%ds/%S/%S" chr pos
-        (Sequence.to_string a) (Sequence.to_string b)
-    | `Insert (s) -> sprintf "%s:%di/%S" chr pos (Sequence.to_string s)
-    | `Delete (nb) -> sprintf "%s:%dd%d" chr pos nb
+  let to_string {name; position = (chr, pos); action} =
+    sprintf "{%s@%s:%d|%s}" name chr pos
+      (match action with
+      | `Replace (a, b) ->
+        sprintf "s/%S/%S" (Sequence.to_string a) (Sequence.to_string b)
+      | `Insert (s) -> sprintf "i/%S" (Sequence.to_string s)
+      | `Delete (nb) -> sprintf "%d/d" nb)
 
   let of_vcf_row_exn row =
     let columns = String.split ~on:(`Character '\t') row in
@@ -181,11 +183,11 @@ module Variant = struct
               reference alt chromosome position in
           match actual_ref, actual_alt with
           | "", "" -> fail ()
-          | "", more -> insert ~at (Sequence.of_string_exn more)
-          | more, "" -> delete ~at (String.length more)
+          | "", more -> insert ~name ~at (Sequence.of_string_exn more)
+          | more, "" -> delete ~name ~at (String.length more)
           | _, _ ->
-            replace ~at (Sequence.of_string_exn actual_ref,
-                         Sequence.of_string_exn actual_alt)
+            replace ~name ~at (Sequence.of_string_exn actual_ref,
+                               Sequence.of_string_exn actual_alt)
         )
     in
     variants
