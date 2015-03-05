@@ -430,10 +430,15 @@ module Graph = struct
       let rec find_stupidly current_position =
         stream ()
         >>= begin function
-        | None -> return None
+        | None ->
+          dbg "can't find_stupidly: at %d" current_position;
+          return None
         | Some node when node.Node.kind <> `Reference ->
           (* if not in the reference “path” we don't adavance *)
           find_stupidly current_position
+        | Some node when Array.length node.Node.next = 0 ->
+          (* last node *)
+          return (Some (node, 1, Sequence.empty))
         | Some node ->
           Cache.get t.sequences node.Node.sequence.Pointer.id
           >>= fun seq ->
@@ -660,9 +665,8 @@ module Graph = struct
           begin match errors with
           | [] -> return ()
           | e ->
-            dbg "Errors!:\n    - %s"
-              (List.map e ~f:Error.to_string |> String.concat ~sep:"\n    -");
-            return ()
+            failwithf "Errors!:\n    - %s"
+              (List.map e ~f:Error.to_string |> String.concat ~sep:"\n    -")
           end
       end
         ~on_exn:(fun ~line_number e ->
