@@ -103,6 +103,7 @@ end
 
 module Sequence: sig
   type t (* 1-based pseudo-strings *)
+  val empty: t
   val of_string_exn: string -> t
   val to_string: t -> string
   val length: t -> int
@@ -111,6 +112,7 @@ module Sequence: sig
   (** In Vim: i^M :) *)
 end = struct
   type t = string
+  let empty = ""
   let of_string_exn s = s
   let to_string a = a
   let length = String.length
