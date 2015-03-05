@@ -528,7 +528,10 @@ module Graph = struct
       new_node t ~kind:`Reference ~sequence_id:after_sequence_id ~next ~prev
     in
     let open Node in
-    babble "New ref node: %s" (Node.to_string new_ref_node);
+    babble "split_reference_node: %s (%s / %s) into\n    %s"
+      (Node.to_string reference_node)
+      (Sequence.to_string before) (Sequence.to_string after)
+      (Node.to_string new_ref_node);
     Cache.store t.nodes ~at:new_ref_node.id ~value:new_ref_node
     >>= fun () ->
     (* Delete old sequence? *)
@@ -576,22 +579,61 @@ module Graph = struct
       end
     | `Delete nb_of_bps ->
       (* a deletion is a shortcut *)
-      find_reference_node t ~chromosome ~position
-      >>= fun  (reference_node, index, reference_sequence) ->
-      babble "Shortcut starts at in %s (+%d %S)"
-        (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
-      split_reference_node t ~reference_node ~index ~reference_sequence
-      >>= fun new_left_ref_node ->
-      find_reference_node t ~chromosome ~position:(position + nb_of_bps)
-      >>= fun  (reference_node, index, reference_sequence) ->
-      babble "Shortcut joins at in %s (+%d %S)"
-        (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
-      split_reference_node t ~reference_node ~index ~reference_sequence
-      >>= fun new_right_ref_node ->
+      begin (* find/create "forking" node *)
+        find_reference_node t ~chromosome ~position
+        >>= fun  (reference_node, index, reference_sequence) ->
+        babble "Shortcut starts at in %s (+%d %S)"
+          (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
+        begin match index with
+        | 1 ->
+          return reference_node
+        | _ ->
+          split_reference_node t ~reference_node ~index ~reference_sequence
+        end
+        >>= fun new_left_ref_node ->
+        get_reference_parent t ~node:new_left_ref_node
+        >>| Option.value_exn ~msg:(sprintf "new_left_ref_node has no parent?")
+      end
+      >>= fun forking_node ->
+      begin (* find/create "joining" node *)
+        find_reference_node t ~chromosome ~position:(position + nb_of_bps)
+        >>= fun  (reference_node, index, reference_sequence) ->
+        babble "Shortcut joins at in %s (+%d %S)"
+          (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
+        begin match index with
+        | 1 -> return reference_node
+        | _ ->
+          split_reference_node t ~reference_node ~index ~reference_sequence
+          >>= fun new_right_ref_node ->
+          return new_right_ref_node
+        end
+      end
+      >>= fun joining_node ->
+      store_new_sequence t ~sequence:Sequence.empty
+      >>= fun sequence_id ->
+      let open Node in
+      let new_variant_node =
+        let next = [| pointer joining_node |] in
+        let prev = [| pointer forking_node |] in
+        new_node t ~kind:(`Db_snp variant) ~sequence_id ~next ~prev
+      in
+      Cache.store t.nodes ~at:new_variant_node.id ~value:new_variant_node
+      >>= fun () ->
+      babble "New variant node: %s" (Node.to_string new_variant_node);
       (*
-         - new_left_ref_node.next += new_node
-         - new_right_ref_node.prev += new_node
+         - forking_node.next += new_node
+         - joining_node.prev += new_node
       *)
+      Cache.store t.nodes ~at:forking_node.id
+        ~value:{
+          forking_node with
+          next = Array.append forking_node.next [| pointer new_variant_node |]}
+      >>= fun () ->
+      Cache.store t.nodes ~at:joining_node.id
+        ~value:{
+          joining_node with
+          prev = Array.append joining_node.prev [| pointer new_variant_node |]}
+      >>= fun () ->
       return ()
     | `Replace _ ->
       return ()
