@@ -351,6 +351,9 @@ module Graph = struct
     } in
     (node)
 
+  let add_or_update_node t node =
+    Cache.store t.nodes ~at:node.Node.id ~value:node
+
   let load_reference: t -> path:string -> (unit, _) Deferred_result.t =
     fun t ~path ->
       (* let next_id = ref (Unique_id.create ()) in *)
@@ -399,7 +402,7 @@ module Graph = struct
             t.roots <- t.roots @ [root_key_of_line n, Some (Node.pointer node)];
             return (`Node node)
           | `Node node, line when String.get line 0 = Some '>' ->
-            Cache.store t.nodes ~at:node.Node.id ~value:node
+            add_or_update_node t node
             >>= fun () ->
             let root_name =
               String.(sub_exn line ~index:1 ~length:(length line - 1)) in
@@ -407,9 +410,8 @@ module Graph = struct
           | `Node node, line ->
             node_of_line ~line_number ~parent:(Node.pointer node) line
             >>= fun (new_node) ->
-            let to_store =
-              {node with Node.next = [| Node.pointer new_node |] } in
-            Cache.store t.nodes ~at:node.Node.id ~value:to_store
+            add_or_update_node t
+              {node with Node.next = [| Node.pointer new_node |] }
             >>= fun () ->
             return (`Node new_node)
         )
@@ -418,8 +420,7 @@ module Graph = struct
       >>= function
       | `New_name name ->
         t.roots  <- t.roots @ [(root_key_of_line name, None)]; return ()
-      | `Node node ->
-        Cache.store t.nodes ~at:node.Node.id ~value:node
+      | `Node node -> add_or_update_node t node
       | `None -> return ()
 
   let find_reference_node t ~chromosome ~position =
@@ -492,23 +493,22 @@ module Graph = struct
     in
     babble "New node: %s\n   goes before %s"
       (Node.to_string new_node) (Node.to_string reference_node);
-    Cache.store t.nodes ~at:new_node.id ~value:new_node
+    add_or_update_node t new_node
     >>= fun () ->
     begin match parent_opt with
     | None  -> return ()
     | Some parent ->
-      let value =
+      let new_parent =
         {parent with
          next = Array.concat [parent.next; [| pointer new_node |] ]}
       in
-      babble "Updated parent: %s" (Node.to_string value);
-      Cache.store t.nodes ~at:parent.id ~value
+      babble "Updated parent: %s" (Node.to_string new_parent);
+      add_or_update_node t new_parent
     end
     >>= fun () ->
-    Cache.store t.nodes ~at:reference_node.id
-      ~value:
-        {reference_node with
-         prev = Array.concat [reference_node.prev; [| pointer new_node |] ]}
+    add_or_update_node t 
+      {reference_node with
+       prev = Array.concat [reference_node.prev; [| pointer new_node |] ]}
 
   let split_reference_node t ~reference_node ~reference_sequence ~index =
         (*
@@ -532,14 +532,13 @@ module Graph = struct
       (Node.to_string reference_node)
       (Sequence.to_string before) (Sequence.to_string after)
       (Node.to_string new_ref_node);
-    Cache.store t.nodes ~at:new_ref_node.id ~value:new_ref_node
+    add_or_update_node t new_ref_node
     >>= fun () ->
     (* Delete old sequence? *)
-    Cache.store t.nodes ~at:reference_node.id
-      ~value:
-        {reference_node with
-         sequence = Pointer.create before_sequence_id;
-         next = [| Node.pointer new_ref_node |]}
+    add_or_update_node t 
+      {reference_node with
+       sequence = Pointer.create before_sequence_id;
+       next = [| Node.pointer new_ref_node |]}
     >>= fun () ->
     Array.fold_left reference_node.next ~init:(return ())
       ~f:(fun unitm child ->
@@ -551,7 +550,7 @@ module Graph = struct
                 if pointer.Pointer.id = reference_node.id
                 then Pointer.create new_ref_node.id
                 else pointer) in
-          Cache.store t.nodes ~at:child_node.id ~value:{child_node with prev})
+          add_or_update_node t {child_node with prev})
     >>= fun () ->
     return new_ref_node
 
@@ -617,24 +616,20 @@ module Graph = struct
         let prev = [| pointer forking_node |] in
         new_node t ~kind:(`Db_snp variant) ~sequence_id ~next ~prev
       in
-      Cache.store t.nodes ~at:new_variant_node.id ~value:new_variant_node
+      add_or_update_node t new_variant_node
       >>= fun () ->
       babble "New variant node: %s" (Node.to_string new_variant_node);
       (*
          - forking_node.next += new_node
          - joining_node.prev += new_node
       *)
-      Cache.store t.nodes ~at:forking_node.id
-        ~value:{
-          forking_node with
-          next = Array.append forking_node.next [| pointer new_variant_node |]}
+      add_or_update_node t {
+        forking_node with
+        next = Array.append forking_node.next [| pointer new_variant_node |]}
       >>= fun () ->
-      Cache.store t.nodes ~at:joining_node.id
-        ~value:{
-          joining_node with
-          prev = Array.append joining_node.prev [| pointer new_variant_node |]}
-      >>= fun () ->
-      return ()
+      add_or_update_node t {
+        joining_node with
+        prev = Array.append joining_node.prev [| pointer new_variant_node |]}
     | `Replace _ ->
       return ()
     end
