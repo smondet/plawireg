@@ -35,8 +35,9 @@ let generate_test_fasta ~path =
       chr "1" "chr with a bunch of Ns" chr1;
       chr "2" "like 1 but testing insertions" chr1;
       chr "3" "like 1 but testing deletions" chr1;
+      chr "4" "like 1 but testing substitutions" chr1;
       [
-        ">4 more tests";
+        ">5 more tests";
         "ACGTC";
         "NTNTC";
         "CAGCN";
@@ -66,14 +67,18 @@ let generate_test_dbnsp ~path =
     "# comment stuf";
     "# comment stuf";
     tabify ["#CHROM"; "POS"; "ID"; "REF"; "ALT"; "QUAL"; "FILTER"; "INFO"];
+    (* variant 2 1 "" "CGT" ~name:"insert-CGT"; *)
     variant 2 4 "N" "NCGT" ~name:"insert-CGT";
     variant 2 9 "N" "NAC,NGTTTT" ~name:"insert-AC-and-GTTTT";
     variant 3 17 "CGT" "C" ~name:"del-GT-inside-ACGTC";
     variant 3 23 "GCNCC" "G" ~name:"del-CNCC-accros-CAGCN-CCACG";
     variant 3 30 "GCATTT" "G" ~name:"del-CATTT-bypass-existing";
-    variant 4 4 "T" "A" ~info:"CAF=[0.9,.01]";
-    variant 4 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
-    variant 4 6 "NTN" "N,NG";
+    variant 4 1 "N" "Y" ~name:"subs-N-Y-at-begining";
+    variant 4 6 "N" "Y" ~name:"subs-N-Y-at-begining-of-seq";
+    variant 4 12 "NN" "NACGT" ~name:"subs-N-ACGT-at-inside-seq";
+    variant 5 4 "T" "A" ~info:"CAF=[0.9,.01]";
+    variant 5 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
+    variant 5 6 "NTN" "N,NG";
   ]
 
 let test_load ~memory_stats ~fasta ~dbsnp =
