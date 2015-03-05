@@ -124,9 +124,14 @@ let test_load ~memory_stats ~fasta ~dbsnp =
             | `Reference -> "doubleoctagon", "B37"
             | `Cosmic cm -> "diamond", cm
           in
+          let color =
+            match Array.length node.next, Array.length node.prev with
+            | 0, _ -> "red"
+            | _, 0 -> "green"
+            | _, _ -> "black" in
           let label = sprintf "\"%s (%s)\"" (seq sequence) comment in
-          fprintf o "N_%s [label=%S,shape=%s];\n"
-            (id node.id) label shape;
+          fprintf o "N_%s [label=%S,shape=%s,color=%s];\n"
+            (id node.id) label shape color;
           Array.iter node.next ~f:(fun {Plawireg.Pointer. id = child} ->
               fprintf o "N_%s -> N_%s[color=red];\n" (id node.id) (id child);
             );
