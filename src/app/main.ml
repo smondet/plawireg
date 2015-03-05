@@ -135,7 +135,7 @@ let test_load ~memory_stats ~fasta ~dbsnp =
             match node.kind with
             | `Db_snp comment ->
               ("box", Plawireg.Variant.to_string comment)
-            | `Reference -> "doubleoctagon", "B37"
+            | `Reference -> "doubleoctagon", ""
             | `Cosmic cm -> "diamond", cm
           in
           let color =
@@ -143,8 +143,10 @@ let test_load ~memory_stats ~fasta ~dbsnp =
             | 0, _ -> "red"
             | _, 0 -> "green"
             | _, _ -> "black" in
-          let label = sprintf "\"%s (%s)\"" (seq sequence) comment in
-          fprintf o "N_%s [label=%S,shape=%s,color=%s];\n"
+          let label =
+            sprintf "%s %s" (seq sequence) comment |> String.strip in
+          fprintf o "N_%s [label=%S,shape=%s,color=%s,\
+                     fontname=\"monospace\",fontsize=18];\n"
             (id node.id) label shape color;
           Array.iter node.next ~f:(fun {Plawireg.Pointer. id = child} ->
               fprintf o "N_%s -> N_%s[color=red];\n" (id node.id) (id child);
