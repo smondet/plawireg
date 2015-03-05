@@ -352,7 +352,7 @@ module Graph = struct
     fun t ~path ->
       (* let next_id = ref (Unique_id.create ()) in *)
       (* let current_root = ref None in *)
-      let node_of_line ~line_number ?parent line =
+      let node_of_line ~line_number ~parent line =
         begin match Sequence.of_string_exn line with
         | s -> return s
         | exception e -> fail (`Graph (`Load_fasta (path, line_number, e)))
@@ -360,8 +360,7 @@ module Graph = struct
         >>= fun sequence ->
         store_new_sequence t ~sequence
         >>= fun sequence_id ->
-        let prev =
-          Option.value_map ~default:[| |] parent ~f:(fun e -> [| e|]) in
+        let prev = [| parent |] in
         return (new_node t ~kind:`Reference ~sequence_id ~next:[| |] ~prev)
       in
       let root_key_of_line line =
@@ -385,6 +384,18 @@ module Graph = struct
         t.roots  <- t.roots @ [(root_key_of_line line, Node.pointer node)];
         return (`Node node)
       in
+      let add_last_node node =
+        store_new_sequence t Sequence.empty
+        >>= fun sequence_id ->
+        let last_node =
+          new_node t ~kind:`Reference ~sequence_id ~next:[| |]
+            ~prev:[| Node.pointer node |]
+        in
+        add_or_update_node t last_node
+        >>= fun () ->
+        babble "Last node: %s" (Node.to_string last_node);
+        add_or_update_node t {node with Node.next = [| Node.pointer last_node |]}
+      in
       fold_lines path ~init:(`None) ~f:(fun ~line_number prev line ->
           match prev, line with
           | `None, line when String.get line 0 = Some '>' ->
@@ -392,7 +403,7 @@ module Graph = struct
           | `None, l ->
             fail (`Graph (`Wrong_fasta (`First_line (path, line_number, l))))
           | `Node node, line when String.get line 0 = Some '>' ->
-            add_or_update_node t node
+            add_last_node node
             >>= fun () ->
             add_root line
           | `Node node, line ->
@@ -406,8 +417,8 @@ module Graph = struct
         ~on_exn:(fun ~line_number e ->
             `Graph (`Load_fasta (path, line_number, e)))
       >>= function
-      | `Node node -> add_or_update_node t node
-      | `None -> return ()
+      | `Node node -> add_last_node node
+      | `None -> (* empty file ⇒ no roots *) return ()
 
   let find_reference_node t ~chromosome ~position =
     (* very stupid implementation,
