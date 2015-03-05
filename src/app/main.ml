@@ -26,9 +26,9 @@ let generate_test_fasta ~path =
     "NNNNN";
     "NNNNN";
     "ACGTC";
-    "CAGCN";
+    "CAGCN"; (* 21 -- 25 *)
     "CCACG";
-    "CCACG";
+    "CATTT"; (* 31 -- 32 *)
     "CCAGC";
     ">2 bla bla";
     ">3 bla bla";
@@ -62,6 +62,9 @@ let generate_test_dbnsp ~path =
     tabify ["#CHROM"; "POS"; "ID"; "REF"; "ALT"; "QUAL"; "FILTER"; "INFO"];
     variant 1 4 "N" "NCGT";
     variant 1 9 "N" "NAC,NGT";
+    variant 1 17 "CGT" "C" ~name:"del-GT-inside-ACGTC";
+    variant 1 23 "GCNCC" "G" ~name:"del-CNCC-accros-CAGCN-CCACG";
+    variant 1 30 "GCATTT" "G" ~name:"del-CATTT-bypass-existing";
     variant 3 4 "T" "A" ~info:"CAF=[0.9,.01]";
     variant 3 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
     variant 3 6 "NTN" "N,NG";
