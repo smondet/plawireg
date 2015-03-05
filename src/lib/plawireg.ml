@@ -570,7 +570,25 @@ module Graph = struct
         >>= fun () ->
         return ()
       end
-    | `Delete _
+    | `Delete nb_of_bps ->
+      (* a deletion is a shortcut *)
+      find_reference_node t ~chromosome ~position
+      >>= fun  (reference_node, index, reference_sequence) ->
+      babble "Shortcut starts at in %s (+%d %S)"
+        (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
+      split_reference_node t ~reference_node ~index ~reference_sequence
+      >>= fun new_left_ref_node ->
+      find_reference_node t ~chromosome ~position:(position + nb_of_bps)
+      >>= fun  (reference_node, index, reference_sequence) ->
+      babble "Shortcut joins at in %s (+%d %S)"
+        (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
+      split_reference_node t ~reference_node ~index ~reference_sequence
+      >>= fun new_right_ref_node ->
+      (*
+         - new_left_ref_node.next += new_node
+         - new_right_ref_node.prev += new_node
+      *)
+      return ()
     | `Replace _ ->
       return ()
     end
