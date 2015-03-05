@@ -140,9 +140,9 @@ module Variant = struct
     sprintf "{%s:%s@%s:%d}" name
       (match action with
       | `Replace (a, b) ->
-        sprintf "s/%S/%S" (Sequence.to_string a) (Sequence.to_string b)
-      | `Insert (s) -> sprintf "i/%S" (Sequence.to_string s)
-      | `Delete (nb) -> sprintf "%d/d" nb)
+        sprintf "s/%s/%s" (Sequence.to_string a) (Sequence.to_string b)
+      | `Insert (s) -> sprintf "i/%s" (Sequence.to_string s)
+      | `Delete (nb) -> sprintf "%dx" nb)
       chr pos
 
   let of_vcf_row_exn row =
