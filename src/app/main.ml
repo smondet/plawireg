@@ -20,8 +20,8 @@ let write_lines ~path l =
   IO.write_file path ~content
 
 let generate_test_fasta ~path =
-  write_lines ~path [
-    ">1 bla bla";
+  let chr name comment lines = sprintf ">%s %s" name comment :: lines in
+  let chr1 = [
     "NNNNN";
     "NNNNN";
     "NNNNN";
@@ -30,17 +30,23 @@ let generate_test_fasta ~path =
     "CCACG";
     "CATTT"; (* 31 -- 32 *)
     "CCAGC";
-    ">2 bla bla";
-    ">3 bla bla";
-    "ACGTC";
-    "NTNTC";
-    "CAGCN";
-    "TNNTC";
-    "CCACG";
-    "CCTCC";
-    "NNNNN";
-    "NNNNN";
-  ]
+  ] in
+  write_lines ~path (List.concat [
+      chr "1" "chr with a bunch of Ns" chr1;
+      chr "2" "like 1 but testing insertions" chr1;
+      chr "3" "like 1 but testing deletions" chr1;
+      [
+        ">4 more tests";
+        "ACGTC";
+        "NTNTC";
+        "CAGCN";
+        "TNNTC";
+        "CCACG";
+        "CCTCC";
+        "NNNNN";
+        "NNNNN";
+      ]
+    ])
 
 let generate_test_dbnsp ~path =
   let tabify l = String.concat ~sep:"\t" l in
@@ -60,14 +66,14 @@ let generate_test_dbnsp ~path =
     "# comment stuf";
     "# comment stuf";
     tabify ["#CHROM"; "POS"; "ID"; "REF"; "ALT"; "QUAL"; "FILTER"; "INFO"];
-    variant 1 4 "N" "NCGT";
-    variant 1 9 "N" "NAC,NGT";
-    variant 1 17 "CGT" "C" ~name:"del-GT-inside-ACGTC";
-    variant 1 23 "GCNCC" "G" ~name:"del-CNCC-accros-CAGCN-CCACG";
-    variant 1 30 "GCATTT" "G" ~name:"del-CATTT-bypass-existing";
-    variant 3 4 "T" "A" ~info:"CAF=[0.9,.01]";
-    variant 3 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
-    variant 3 6 "NTN" "N,NG";
+    variant 2 4 "N" "NCGT" ~name:"insert-CGT";
+    variant 2 9 "N" "NAC,NGTTTT" ~name:"insert-AC-and-GTTTT";
+    variant 3 17 "CGT" "C" ~name:"del-GT-inside-ACGTC";
+    variant 3 23 "GCNCC" "G" ~name:"del-CNCC-accros-CAGCN-CCACG";
+    variant 3 30 "GCATTT" "G" ~name:"del-CATTT-bypass-existing";
+    variant 4 4 "T" "A" ~info:"CAF=[0.9,.01]";
+    variant 4 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
+    variant 4 6 "NTN" "N,NG";
   ]
 
 let test_load ~memory_stats ~fasta ~dbsnp =
