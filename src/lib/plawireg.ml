@@ -554,8 +554,62 @@ module Graph = struct
     >>= fun () ->
     return new_ref_node
 
+  let add_path_to_reference t
+      ~chromosome ~fork_position ~join_position ~sequence ~kind =
+    begin (* find/create "forking" node *)
+      find_reference_node t ~chromosome ~position:fork_position
+      >>= fun  (reference_node, index, reference_sequence) ->
+      babble "Shortcut starts at in %s (+%d %S)"
+        (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
+      begin match index with
+      | 1 ->
+        return reference_node
+      | _ ->
+        split_reference_node t ~reference_node ~index ~reference_sequence
+      end
+      >>= fun new_left_ref_node ->
+      get_reference_parent t ~node:new_left_ref_node
+      >>| Option.value_exn ~msg:(sprintf "new_left_ref_node has no parent?")
+    end
+    >>= fun forking_node ->
+    begin (* find/create "joining" node *)
+      find_reference_node t ~chromosome ~position:join_position
+      >>= fun  (reference_node, index, reference_sequence) ->
+      babble "Shortcut joins at in %s (+%d %S)"
+        (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
+      begin match index with
+      | 1 -> return reference_node
+      | _ ->
+        split_reference_node t ~reference_node ~index ~reference_sequence
+        >>= fun new_right_ref_node ->
+        return new_right_ref_node
+      end
+    end
+    >>= fun joining_node ->
+    store_new_sequence t ~sequence
+    >>= fun sequence_id ->
+    let open Node in
+    let new_variant_node =
+      let next = [| pointer joining_node |] in
+      let prev = [| pointer forking_node |] in
+      new_node t ~kind ~sequence_id ~next ~prev
+    in
+    add_or_update_node t new_variant_node
+    >>= fun () ->
+    babble "New variant node: %s" (Node.to_string new_variant_node);
+      (*
+         - forking_node.next += new_node
+         - joining_node.prev += new_node
+      *)
+    add_or_update_node t {
+      forking_node with
+      next = Array.append forking_node.next [| pointer new_variant_node |]}
+    >>= fun () ->
+    add_or_update_node t {
+      joining_node with
+      prev = Array.append joining_node.prev [| pointer new_variant_node |]}
+
   let integrate_variant t  ~variant =
-    (* TODO *)
     let chromosome, position = variant.Variant.position in
     begin match variant.Variant.action with
     | `Insert ins ->
@@ -577,61 +631,14 @@ module Graph = struct
         return ()
       end
     | `Delete nb_of_bps ->
-      (* a deletion is a shortcut *)
-      begin (* find/create "forking" node *)
-        find_reference_node t ~chromosome ~position
-        >>= fun  (reference_node, index, reference_sequence) ->
-        babble "Shortcut starts at in %s (+%d %S)"
-          (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
-        begin match index with
-        | 1 ->
-          return reference_node
-        | _ ->
-          split_reference_node t ~reference_node ~index ~reference_sequence
-        end
-        >>= fun new_left_ref_node ->
-        get_reference_parent t ~node:new_left_ref_node
-        >>| Option.value_exn ~msg:(sprintf "new_left_ref_node has no parent?")
-      end
-      >>= fun forking_node ->
-      begin (* find/create "joining" node *)
-        find_reference_node t ~chromosome ~position:(position + nb_of_bps)
-        >>= fun  (reference_node, index, reference_sequence) ->
-        babble "Shortcut joins at in %s (+%d %S)"
-          (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
-        begin match index with
-        | 1 -> return reference_node
-        | _ ->
-          split_reference_node t ~reference_node ~index ~reference_sequence
-          >>= fun new_right_ref_node ->
-          return new_right_ref_node
-        end
-      end
-      >>= fun joining_node ->
-      store_new_sequence t ~sequence:Sequence.empty
-      >>= fun sequence_id ->
-      let open Node in
-      let new_variant_node =
-        let next = [| pointer joining_node |] in
-        let prev = [| pointer forking_node |] in
-        new_node t ~kind:(`Db_snp variant) ~sequence_id ~next ~prev
-      in
-      add_or_update_node t new_variant_node
-      >>= fun () ->
-      babble "New variant node: %s" (Node.to_string new_variant_node);
-      (*
-         - forking_node.next += new_node
-         - joining_node.prev += new_node
-      *)
-      add_or_update_node t {
-        forking_node with
-        next = Array.append forking_node.next [| pointer new_variant_node |]}
-      >>= fun () ->
-      add_or_update_node t {
-        joining_node with
-        prev = Array.append joining_node.prev [| pointer new_variant_node |]}
-    | `Replace _ ->
-      return ()
+      add_path_to_reference t ~chromosome
+        ~fork_position:position ~join_position:(position + nb_of_bps)
+        ~sequence:Sequence.empty ~kind:(`Db_snp variant)
+    | `Replace (to_replace, sequence) ->
+      let join_position = position + Sequence.length to_replace in
+      add_path_to_reference t ~chromosome
+        ~fork_position:position ~join_position
+        ~sequence ~kind:(`Db_snp variant)
     end
 
 
