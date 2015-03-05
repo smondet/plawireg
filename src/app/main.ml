@@ -120,8 +120,8 @@ let test_load ~memory_stats ~fasta ~dbsnp =
           let shape, comment =
             match node.kind with
             | `Db_snp comment ->
-              ("doubleoctagon", Plawireg.Variant.to_string comment)
-            | `Reference -> "box", "B37"
+              ("box", Plawireg.Variant.to_string comment)
+            | `Reference -> "doubleoctagon", "B37"
             | `Cosmic cm -> "diamond", cm
           in
           let label = sprintf "\"%s (%s)\"" (seq sequence) comment in
