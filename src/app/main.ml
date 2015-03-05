@@ -29,7 +29,7 @@ let generate_test_fasta ~path =
     "CAGCN"; (* 21 -- 25 *)
     "CCACG";
     "CATTT"; (* 31 -- 32 *)
-    "CCAGC";
+    "CCAGT";
   ] in
   write_lines ~path (List.concat [
       chr "1" "chr with a bunch of Ns" chr1;
@@ -76,9 +76,15 @@ let generate_test_dbnsp ~path =
     variant 4 1 "N" "Y" ~name:"subs-N-Y-at-begining";
     variant 4 6 "N" "Y" ~name:"subs-N-Y-at-begining-of-seq";
     variant 4 12 "NN" "NACGT" ~name:"subs-N-ACGT-at-inside-seq";
-    variant 5 4 "T" "A" ~info:"CAF=[0.9,.01]";
-    variant 5 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
-    variant 5 6 "NTN" "N,NG";
+    variant 4 39 "GT" "HELLO" ~name:"subs-GT-HELLO-at-the-end";
+    variant 5 4 "T" "A"
+      ~name:"SNV-T-A"
+      ~info:"CAF=[0.9,.01]";
+    variant 5 5 "C" "A,CTGTG"
+      ~name:"subs+ins-after-SNV-T-A"
+      ~info:"CAF=[0.8,0.15,0.05]";
+    variant 5 6 "NTN" "N,NG"
+      ~name:"del-TN-or-subs-G" ;
   ]
 
 let test_load ~memory_stats ~fasta ~dbsnp =
