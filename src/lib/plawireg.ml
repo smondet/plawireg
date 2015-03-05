@@ -223,7 +223,7 @@ module Graph = struct
   type t = {
     sequences: Sequence.t Cache.t;
     nodes: Node.t Cache.t;
-    mutable roots: (root_key * Node.t Pointer.t option) list;
+    mutable roots: (root_key * Node.t Pointer.t) list;
   }
   module Error = struct
     let rec to_string = function
@@ -272,46 +272,39 @@ module Graph = struct
 
   let stream_of_root t ~name = 
     match List.find t.roots ~f:(fun (n, _) -> n = name) with
-    | None
-    | Some (_, None) -> (fun () -> return None)
-    | Some (_, Some node_p) ->
+    | None -> (fun () -> return None)
+    | Some (_, node_p) ->
       stream_of_node_pointer t node_p
 
   let count_nodes t =
-    List.fold ~init:(return []) t.roots ~f:(fun prev root ->
+    List.fold ~init:(return []) t.roots ~f:(fun prev (name, np) ->
         prev >>= fun prev_list ->
-        match root with
-        | (name, None) -> return ((name, 0) :: prev_list)
-        | (name, Some np) -> 
-          let stream = stream_of_node_pointer t np in
-          let c = ref 0 in
-          let rec count () =
-            stream () >>= function
-            | Some node -> incr c; count ()
-            | None -> return ()
-          in
-          count ()
-          >>= fun () ->
-          return ((name, !c) :: prev_list))
+        let stream = stream_of_node_pointer t np in
+        let c = ref 0 in
+        let rec count () =
+          stream () >>= function
+          | Some node -> incr c; count ()
+          | None -> return ()
+        in
+        count ()
+        >>= fun () ->
+        return ((name, !c) :: prev_list))
 
   let fold t ~init ~f =
-    List.fold ~init:(return init) t.roots ~f:(fun prev root ->
+    List.fold ~init:(return init) t.roots ~f:(fun prev (name, np) ->
         prev >>= fun prev ->
-        match root with
-        | (name, None) -> f prev (`Name name)
-        | (name, Some np) -> 
-          f prev (`Name name)
-          >>= fun next ->
-          let stream = stream_of_node_pointer t np in
-          let rec go current =
-            stream () >>= function
-            | Some node ->
-              f current (`Node node)
-              >>= fun next ->
-              go next
-            | None -> return current
-          in
-          go next)
+        f prev (`Name name)
+        >>= fun next ->
+        let stream = stream_of_node_pointer t np in
+        let rec go current =
+          stream () >>= function
+          | Some node ->
+            f current (`Node node)
+            >>= fun next ->
+            go next
+          | None -> return current
+        in
+        go next)
 
   let expand_node t ~node =
     let open Node in
@@ -371,8 +364,10 @@ module Graph = struct
         return (new_node t ~kind:`Reference ~sequence_id ~next:[| |] ~prev)
       in
       let root_key_of_line line =
+        let with_out_carret =
+          String.(sub_exn line ~index:1 ~length:(length line - 1)) in
         match
-          line |> String.split ~on:(`Character ' ')
+          with_out_carret |> String.split ~on:(`Character ' ')
           |> List.filter_map
             ~f:(fun s -> match String.strip s with "" -> None | st -> Some st)
         with
@@ -380,33 +375,25 @@ module Graph = struct
           {chromosome; comment = String.concat ~sep:" " (more :: than_one)}
         | other -> failwithf "Cannot find chromosome name: %S" line
       in
+      let add_root line =
+        store_new_sequence t Sequence.empty
+        >>= fun sequence_id ->
+        let node =
+          new_node t ~kind:`Reference ~sequence_id ~next:[| |] ~prev:[| |]
+        in
+        t.roots  <- t.roots @ [(root_key_of_line line, Node.pointer node)];
+        return (`Node node)
+      in
       fold_lines path ~init:(`None) ~f:(fun ~line_number prev line ->
-          (* dbg "line: %S" line; *)
           match prev, line with
           | `None, line when String.get line 0 = Some '>' ->
-            let root_name =
-              String.(sub_exn line ~index:1 ~length:(length line - 1)) in
-            return (`New_name root_name)
+            add_root line
           | `None, l ->
             fail (`Graph (`Wrong_fasta (`First_line (path, line_number, l))))
-          | `New_name n, line when String.get line 0 = Some '>' ->
-            (* empty fasta sequence *)
-            t.roots  <- t.roots @ [(root_key_of_line n, None)];
-            let root_name =
-              String.(sub_exn line ~index:1 ~length:(length line - 1)) in
-            return (`New_name root_name)
-          | `New_name n, line ->
-            (* first node of the new root *)
-            node_of_line ~line_number ?parent:None line
-            >>= fun node ->
-            t.roots <- t.roots @ [root_key_of_line n, Some (Node.pointer node)];
-            return (`Node node)
           | `Node node, line when String.get line 0 = Some '>' ->
             add_or_update_node t node
             >>= fun () ->
-            let root_name =
-              String.(sub_exn line ~index:1 ~length:(length line - 1)) in
-            return (`New_name root_name)
+            add_root line
           | `Node node, line ->
             node_of_line ~line_number ~parent:(Node.pointer node) line
             >>= fun (new_node) ->
@@ -418,8 +405,6 @@ module Graph = struct
         ~on_exn:(fun ~line_number e ->
             `Graph (`Load_fasta (path, line_number, e)))
       >>= function
-      | `New_name name ->
-        t.roots  <- t.roots @ [(root_key_of_line name, None)]; return ()
       | `Node node -> add_or_update_node t node
       | `None -> return ()
 
@@ -428,8 +413,7 @@ module Graph = struct
        and later we'll optimize with the right "addressing" *)
     begin match List.find t.roots (fun (r, _) -> r.chromosome = chromosome) with
     | None -> return None
-    | Some (_, None) -> return None
-    | Some (_, Some node_p) ->
+    | Some (_, node_p) ->
       let stream = stream_of_node_pointer t node_p in
       let rec find_stupidly current_position =
         stream ()
