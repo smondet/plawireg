@@ -37,5 +37,9 @@ The test dumps a `out.dot` file that one can observe:
 
     dot -Tpng out.dot -O
 
+It should give something like this:
 
+![Output as of 2015-03-06][plawireg-dot-output]
+
+[plawireg-dot-output]: https://cloud.githubusercontent.com/assets/617111/6535827/f161ffd8-c415-11e4-8b21-b2f97655c407.png
 
