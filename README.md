@@ -25,12 +25,17 @@ and run some stuff:
 
     ./plawireg test-load mini-reference.fasta mini-dbsnp.vcf
     
-For now the `verbose` option works only on Linux:
+You can make things more verbose:
 
-    ./plawireg test-load mini-reference.fasta mini-dbsnp.vcf verbose
+    VERBOSE=true ./plawireg test-load mini-reference.fasta mini-dbsnp.vcf
 
-(The dbSNP part is not yet implemented ;) )
+Or ask for “linux-only” memory-usage stats along the way:
 
+    ./plawireg test-load mini-reference.fasta mini-dbsnp.vcf memory-stats
+
+The test dumps a `out.dot` file that one can observe:
+
+    dot -Tpng out.dot -O
 
 
 
