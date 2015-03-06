@@ -661,7 +661,7 @@ module Graph = struct
           temp := variants :: !temp;
           Deferred_list.for_concurrent variants ~f:(fun variant ->
               babble "Variant: %s" (Variant.to_string variant);
-              if line_number mod 10_000 = 0 then
+              if line_number mod 1_000 = 0 then
                 dbg "[%s] %s:%d Variant: %s"
                   Time.(now () |> to_filename) path line_number
                   (Variant.to_string variant);
