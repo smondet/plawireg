@@ -5,6 +5,7 @@ open Deferred_result
 
 let failwithf fmt = ksprintf failwith fmt
 
+let verbose = Plawireg.is_babbling
 
 module Error = struct
   let to_string = function
@@ -59,17 +60,17 @@ let generate_test_dbnsp ~path =
     "# comment stuf";
     "# comment stuf";
     tabify ["#CHROM"; "POS"; "ID"; "REF"; "ALT"; "QUAL"; "FILTER"; "INFO"];
-    variant 1 4 "N" "ACGT";
-    variant 1 9 "N" "AC,GT";
+    variant 1 4 "N" "NCGT";
+    variant 1 9 "N" "NAC,NGT";
     variant 3 4 "T" "A" ~info:"CAF=[0.9,.01]";
     variant 3 5 "C" "A,CTGTG" ~info:"CAF=[0.8,0.15,0.05]";
-    variant 3 6 "NTN" "N";
+    variant 3 6 "NTN" "N,NG";
   ]
 
-let test_load ~verbose ~fasta ~dbsnp =
+let test_load ~memory_stats ~fasta ~dbsnp =
   let outline fmt = ksprintf (fun s -> printf "%s\n" s; return ()) fmt in
   let print_stats msg =
-    if verbose then
+    if memory_stats then
       begin
         printf "\n=== %s %s ===\nGC stats:\n" msg Plawireg.Time.(now () |> to_filename);
         Gc.print_stat stdout;
@@ -89,15 +90,10 @@ let test_load ~verbose ~fasta ~dbsnp =
   print_stats "before load_reference" >>= fun () ->
   Plawireg.Graph.load_reference graph ~path:fasta
   >>= fun () ->
-      (*
-      let out = open_out "./datadumb.bin" in
-      Marshal.to_channel out graph [Marshal.No_sharing];
-      close_out out;
-      *)
-  printf "Roots:\n   %s\n%!"
-    (Plawireg.Graph.chromosome_names graph |> String.concat ~sep:"\n   ");
+  print_stats "before add_vcf" >>= fun () ->
   Plawireg.Graph.add_vcf graph ~path:dbsnp
   >>= fun () ->
+  print_stats "before count_nodes" >>= fun () ->
   Plawireg.Graph.count_nodes graph
   >>= fun counts ->
   let () =
@@ -108,10 +104,9 @@ let test_load ~verbose ~fasta ~dbsnp =
   print_stats "before fold" >>= fun () ->
   Plawireg.Graph.fold graph ~init:() ~f:(fun () -> function
     | `Name n -> outline "» %s" n.Plawireg.Graph.chromosome
-    | `Node node ->
-      (* outline "  %s → %s" *)
-      (*   (Plawireg.Unique_id.to_string id) (Plawireg.Sequence.to_string seq) *)
-      return ()
+    | `Node node when verbose ->
+      outline "Node: %s" (Plawireg.Node.to_string node);
+    | `Node node -> return ()
     )
   >>= fun () ->
   print_stats "before second fold" >>= fun () ->
@@ -174,8 +169,8 @@ let () =
       | other -> failwithf "Unknown file-kind to generate"
       end
     | "test-load" :: fasta :: dbsnp :: more ->
-      let verbose = List.mem ~set:more "verbose" in
-      test_load ~verbose ~fasta ~dbsnp
+      let memory_stats = List.mem ~set:more "memory-stats" in
+      test_load ~memory_stats ~fasta ~dbsnp
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Plawireg.Unique_id.test ());

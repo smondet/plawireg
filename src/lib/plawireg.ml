@@ -6,6 +6,13 @@ open Nonstd
 module String = Sosa.Native_string
 
 let dbg fmt = ksprintf (fun s -> printf "%s\n%!" s) fmt
+let is_babbling =
+  try Sys.getenv "VERBOSE" = "true" with _ -> false
+let babble fmt =
+  ksprintf (fun s ->
+      if is_babbling then dbg "%s" s else ()
+    ) fmt
+
 let failwithf fmt = ksprintf failwith fmt
 
 module Exn = struct
@@ -80,7 +87,7 @@ module Cache = struct
   let create () = Hashtbl.create 42
   let store: 'a t -> at:Pointer.id -> value:'a -> (unit, _) Deferred_result.t =
     fun cache ~at ~value ->
-      Hashtbl.add cache at value;
+      Hashtbl.replace cache at value;
       return ()
   let get: 'a t -> Pointer.id -> ('a, _) Deferred_result.t =
     fun cache id ->
@@ -111,21 +118,95 @@ module Node = struct
     kind: [ `Reference | `Db_snp of string | `Cosmic of string ];
     sequence: Sequence.t Pointer.t;
     next: t Pointer.t array;
-    parent: t Pointer.t option;
+    prev: t Pointer.t array;
   }
   let pointer t = Pointer.create t.id
-  let to_string { id; kind; sequence; next; parent } =
+  let to_string { id; kind; sequence; next; prev } =
+    let of_array name arr =
+      match Array.to_list arr with
+       | [] -> "no-" ^ name
+       | a ->
+         name ^ ":" ^ String.concat ~sep:"," (List.map ~f:Pointer.to_string a)
+    in
     sprintf "{%s: %s (%s, %s)}"
       (Unique_id.to_string id)
       (match kind with
        | `Db_snp s -> sprintf "DB:%s" s
        | `Reference -> sprintf "Ref"
        | `Cosmic s -> sprintf "DB:%s" s)
-      (match Array.to_list next with
-       | [] -> "no-next"
-       | a ->  "next:" ^ String.concat ~sep:"," (List.map ~f:Pointer.to_string a))
-      (Option.value_map parent ~default:"root"
-         ~f:(fun p -> sprintf "parent:%s" (Pointer.to_string p)))
+      (of_array "next" next)
+      (of_array "prev" prev)
+end
+module Variant = struct
+  type t = {
+    position: string * int;
+    action: [
+      | `Replace of Sequence.t * Sequence.t
+      | `Delete of int
+      | `Insert of Sequence.t
+    ]}
+  let create ~position action = {position; action}
+  let replace ~at (ref, alt) =
+    create ~position:at (`Replace (ref, alt))
+  let insert ~at alt = create ~position:at (`Insert alt)
+  let delete ~at nb = create ~position:at (`Delete nb)
+
+  let to_string {position = (chr, pos); action} =
+    match action with
+    | `Replace (a, b) ->
+      sprintf "%s:%ds/%S/%S" chr pos
+        (Sequence.to_string a) (Sequence.to_string b)
+    | `Insert (s) -> sprintf "%s:%di/%S" chr pos (Sequence.to_string s)
+    | `Delete (nb) -> sprintf "%s:%dd%d" chr pos nb
+
+  let of_vcf_row_exn row =
+    let columns = String.split ~on:(`Character '\t') row in
+    (* dbg "Row: %s" (String.concat ~sep:", " columns); *)
+    let chromosome, position, name,
+        reference, alt_l (* and that's all for now *) =
+      let ios s =
+        Int.of_string s
+        |> Option.value_exn ~msg:(sprintf "not an int: %s" s) in
+      match columns with
+      | chrs :: poss :: name :: ref :: alt :: _ ->
+        (chrs, ios poss, name, ref, String.split ~on:(`Character ',') alt)
+      | other -> 
+        failwithf "Not enough columns: %S" row
+    in
+    let variants =
+      List.map alt_l ~f:(fun alt ->
+          let common_prefix_length =
+            let i = ref 0 in
+            match String.find reference ~f:(fun c ->
+                match String.get alt !i with
+                | Some cc -> incr i; c <> cc
+                | None -> true)
+            with
+            | Some index -> index
+            | None -> String.length reference in
+          let actual_ref =
+            String.sub_exn reference ~index:common_prefix_length
+              ~length:(String.length reference - common_prefix_length) in
+          let actual_alt =
+            String.sub_exn alt ~index:common_prefix_length
+              ~length:(String.length alt - common_prefix_length) in
+          let at = chromosome, position + common_prefix_length in
+          babble "Variant: pos:%d common:%d %S → %S"
+            position common_prefix_length actual_ref actual_alt;
+          let fail () =
+            failwithf "Unexpected variant ref: %s, alt: %s at %s:%d."
+              reference alt chromosome position in
+          match actual_ref, actual_alt with
+          | "", "" -> fail ()
+          | "", more -> insert ~at (Sequence.of_string_exn more)
+          | more, "" -> delete ~at (String.length more)
+          | _, _ ->
+            replace ~at (Sequence.of_string_exn actual_ref,
+                         Sequence.of_string_exn actual_alt)
+        )
+    in
+    variants
+
 end
 module Graph = struct
   type root_key = {chromosome: string; comment: string}
@@ -134,6 +215,20 @@ module Graph = struct
     nodes: Node.t Cache.t;
     mutable roots: (root_key * Node.t Pointer.t option) list;
   }
+  module Error = struct
+    let rec to_string = function
+    | `Load_fasta (file, line, e) ->
+      sprintf "Load_fasta: %S:%d %s" file line (Exn.to_string e)
+    | `Load_vcf (file, line, e) ->
+      sprintf "Load_vcf: %S:%d %s" file line (Exn.to_string e)
+    | `Wrong_fasta (`First_line (path, line, l)) ->
+      sprintf "Wrong_fasta: %S:%d: first-line not '>' %S" path line l
+    | `Node_not_found (chr, pos) ->
+      sprintf "Node_not_found %s:%d" chr pos
+    | `Graph e -> to_string e
+    | `Cache e -> Cache.Error.to_string e
+  end
+
   let create () =
     let nodes = Cache.create () in
     let sequences = Cache.create () in
@@ -146,16 +241,20 @@ module Graph = struct
 
   let stream_of_node_pointer t node_p =
     let stack_of_nodes = ref [node_p] in
+    let visited_nodes = ref [] in
     (fun () ->
        let open Node in
        begin match !stack_of_nodes with
        | node_p :: more ->
+         visited_nodes := node_p.Pointer.id :: !visited_nodes;
          Cache.get t.nodes node_p.Pointer.id
          >>= fun node ->
          (* inline implementation of a reverse-append-array-to-stack-list: *)
          stack_of_nodes := more;
          for i = Array.length node.next - 1 downto 0 do
-           stack_of_nodes := node.next.(i) :: !stack_of_nodes
+           if List.mem node.next.(i).Pointer.id ~set:!visited_nodes
+           then ()
+           else stack_of_nodes := node.next.(i) :: !stack_of_nodes
          done;
          return (Some node)
        | [] -> return None
@@ -225,6 +324,23 @@ module Graph = struct
     in
     loop 1 init
 
+  let store_new_sequence t ~sequence =
+    let sequence_id = Unique_id.create () in
+    Cache.store t.sequences ~at:sequence_id ~value:sequence
+    >>= fun () ->
+    return sequence_id
+
+  let new_node t ~kind  ~sequence_id ~next ~prev =
+    let node_id = Unique_id.create () in
+    let node = {
+      Node. id = node_id;
+      kind = `Reference;
+      sequence = {Pointer.id = sequence_id};
+      next;
+      prev;
+    } in
+    (node)
+
   let load_reference: t -> path:string -> (unit, _) Deferred_result.t =
     fun t ~path ->
       (* let next_id = ref (Unique_id.create ()) in *)
@@ -235,16 +351,12 @@ module Graph = struct
         | exception e -> fail (`Graph (`Load_fasta (path, line_number, e)))
         end
         >>= fun sequence ->
-        let sequence_id = Unique_id.create () in
-        Cache.store t.sequences ~at:sequence_id ~value:sequence
-        >>= fun () ->
-        let node_id = Unique_id.create () in
-        let node = {Node. id = node_id;
-                    kind = `Reference;
-                    sequence = {Pointer.id = sequence_id};
-                    next = [|  |];
-                    parent;} in
-        return node in
+        store_new_sequence t ~sequence
+        >>= fun sequence_id ->
+        let prev =
+          Option.value_map ~default:[| |] parent ~f:(fun e -> [| e|]) in
+        return (new_node t ~kind:`Reference ~sequence_id ~next:[| |] ~prev)
+      in
       let root_key_of_line line =
         match
           line |> String.split ~on:(`Character ' ')
@@ -300,18 +412,155 @@ module Graph = struct
         Cache.store t.nodes ~at:node.Node.id ~value:node
       | `None -> return ()
 
-  let add_vcf: t -> path:string -> (unit, _) Deferred_result.t =
-    fun t ~path ->
-      dbg "Ignoring %S" path;
+  let find_reference_node t ~chromosome ~position =
+    (* very stupid implementation,
+       and later we'll optimize with the right "addressing" *)
+    begin match List.find t.roots (fun (r, _) -> r.chromosome = chromosome) with
+    | None -> return None
+    | Some (_, None) -> return None
+    | Some (_, Some node_p) ->
+      let stream = stream_of_node_pointer t node_p in
+      let rec find_stupidly current_position =
+        stream ()
+        >>= begin function
+        | None -> return None
+        | Some node when node.Node.kind <> `Reference ->
+          (* if not in the reference “path” we don't adavance *)
+          find_stupidly current_position
+        | Some node ->
+          Cache.get t.sequences node.Node.sequence.Pointer.id
+          >>= fun seq ->
+          let lgth = Sequence.length seq in
+          if current_position + lgth - 1 >=  position
+          then return (Some (node, position - current_position + 1, seq))
+          else find_stupidly (current_position + lgth)
+        end
+      in
+      find_stupidly 1
+    end
+    >>= function
+    | Some n -> return n
+    | None -> fail (`Graph (`Node_not_found (chromosome, position)))
+
+  let insert_node t ~split ~at ~new_path ~kind =
+    match at with
+    | 1 ->
+      (*
+         - add new child
+         - find node corresponding the end of new_path
+         - reonnect end of the new path to that one
+           (potentially insert another node)
+      *)
+      return ()
+    | _ ->
+      (* change sequence of split
+      *)
       return ()
 
-  module Error = struct
-    let to_string = function
-    | `Load_fasta (file, line, e) ->
-      sprintf "Load_fasta: %S:%d %s" file line (Exn.to_string e)
-    | `Load_vcf (file, line, e) ->
-      sprintf "Load_vcf: %S:%d %s" file line (Exn.to_string e)
-    | `Wrong_fasta (`First_line (path, line, l)) ->
-      sprintf "Wrong_fasta: %S:%d: first-line not '>' %S" path line l
-  end
+  let get_parent_nodes t ~node =
+    Array.fold_left ~init:(return []) node.Node.prev ~f:(fun l_m pointer ->
+        l_m >>= fun l ->
+        Cache.get t.nodes (pointer.Pointer.id)
+        >>= fun parent ->
+        return (parent :: l))
+
+  let integrate_variant t  ~variant =
+    (* TODO *)
+    let chromosome, position = variant.Variant.position in
+    begin match variant.Variant.action with
+    | `Insert ins ->
+      (* find node, split there if needed, insert new path *)
+      find_reference_node t ~chromosome ~position
+      >>= fun  (node, index, seq) ->
+      babble "Integrating in %s (+%d %S)"
+        (Node.to_string node) index (Sequence.to_string seq);
+      begin match index with
+      | 1 ->
+        (* insert from there:
+           - find parents of node
+           - parents.next += new_node
+           - new_node.parent = parents
+           - node.parents += new_node
+           - new_node.next = node
+        *)
+        get_parent_nodes t ~node
+        >>= fun parents ->
+        store_new_sequence t ~sequence:ins
+        >>= fun sequence_id ->
+        let new_node =
+          let next = [| Node.pointer node |] in
+          let prev = Array.copy node.Node.prev in
+          new_node t ~kind:(`Db_snp "dbsnp-todo") ~sequence_id ~next ~prev
+        in
+        babble "New node: %s" (Node.to_string new_node);
+        let open Node in
+        Cache.store t.nodes ~at:new_node.id ~value:new_node
+        >>= fun () ->
+        List.fold parents ~init:(return ()) ~f:(fun unitm parent ->
+            unitm
+            >>= fun () ->
+            let value =
+              {parent with
+               next = Array.concat [parent.next; [| pointer new_node |] ]}
+            in
+            babble "Updated parent: %s" (Node.to_string value);
+            Cache.store t.nodes ~at:parent.id ~value)
+        >>= fun () ->
+        Cache.store t.nodes ~at:node.id
+          ~value:
+            {node with prev = Array.concat [node.prev; [| pointer new_node |] ]}
+      | _ ->
+        return ()
+      end
+    | `Delete _
+    | `Replace _ ->
+      return ()
+    end
+
+
+  let add_vcf: t -> path:string -> (unit, _) Deferred_result.t =
+    fun t ~path ->
+      let temp = ref [] in
+      fold_lines path ~init:() ~f:begin fun ~line_number () line ->
+        match line with
+        | comment when String.get comment ~index:0 = Some '#' ->
+          dbg "Comment: %s" comment;
+          return ()
+        | row ->
+          let variants = Variant.of_vcf_row_exn row in
+          temp := variants :: !temp;
+          Deferred_list.for_concurrent variants ~f:(fun variant ->
+              babble "Variant: %s" (Variant.to_string variant);
+              if line_number mod 10_000 = 0 then
+                dbg "[%s] %s:%d Variant: %s"
+                  Time.(now () |> to_filename) path line_number
+                  (Variant.to_string variant);
+              integrate_variant t ~variant)
+          >>= fun ((_ : unit list), errors) ->
+          begin match errors with
+          | [] -> return ()
+          | e ->
+            dbg "Errors!:\n    - %s"
+              (List.map e ~f:Error.to_string |> String.concat ~sep:"\n    -");
+            return ()
+          end
+      end
+        ~on_exn:(fun ~line_number e ->
+            `Graph (`Load_vcf (path, line_number, e)))
+      >>= fun () ->
+      let snv, ins, del, repl =
+        List.fold !temp ~init:(0,0,0,0) ~f:(fun init variants ->
+            List.fold variants ~init ~f:(fun (snv, ins, del, repl) v ->
+                match v.Variant.action with
+                | `Replace (a, b)
+                  when Sequence.length a = 1 && Sequence.length b = 1 ->
+                  (snv + 1, ins, del, repl)
+                | `Replace _ -> (snv, ins, del, repl + 1)
+                | `Insert _ -> (snv, ins + 1, del, repl)
+                | `Delete _ -> (snv, ins, del + 1, repl)))
+      in
+      dbg "Variants: %d “lines”, %d snvs, %d ins, %d dels, %d repls"
+        (List.length !temp) snv ins del repl;
+      return ()
+
 end
