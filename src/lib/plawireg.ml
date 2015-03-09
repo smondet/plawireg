@@ -235,7 +235,7 @@ module Graph = struct
       sprintf "Load_vcf: %S:%d %s" file line (Exn.to_string e)
     | `Wrong_fasta (`First_line (path, line, l)) ->
       sprintf "Wrong_fasta: %S:%d: first-line not '>' %S" path line l
-    | `Node_not_found (chr, pos) ->
+    | `Node_not_found (`Global_position (chr, pos)) ->
       sprintf "Node_not_found %s:%d" chr pos
     | `Graph e -> to_string e
     | `Cache e -> Cache.Error.to_string e
@@ -425,13 +425,21 @@ module Graph = struct
       | `Node node -> add_last_node node
       | `None -> (* empty file ⇒ no roots *) return ()
 
-  let find_reference_node t ~chromosome ~position =
-    (* very stupid implementation,
-       and later we'll optimize with the right "addressing" *)
-    begin match List.find t.roots (fun (r, _) -> r.chromosome = chromosome) with
-    | None -> return None
-    | Some (_, node_p) ->
-      let stream = stream_of_node_pointer t node_p in
+  let find_reference_node t ~from =
+    let fail e = fail (`Graph e) in
+    begin match from with
+    | `Global_position (chromosome, position) ->
+      (* very stupid implementation,
+         and later we'll optimize with the right "addressing" *)
+      begin match List.find t.roots (fun (r, _) -> r.chromosome = chromosome) with
+      | None -> fail (`Node_not_found from)
+      | Some (_, node_p) ->
+        return (node_p, position)
+      end
+    end
+    >>= fun (starting_node, position) ->
+    begin
+      let stream = stream_of_node_pointer t starting_node in
       let rec find_stupidly current_position =
         stream ()
         >>= begin function
@@ -457,7 +465,7 @@ module Graph = struct
     end
     >>= function
     | Some n -> return n
-    | None -> fail (`Graph (`Node_not_found (chromosome, position)))
+    | None -> fail (`Node_not_found from)
 
   let get_reference_parent t ~node =
     Array.fold_left ~init:(return []) node.Node.prev ~f:(fun l_m pointer ->
@@ -563,7 +571,7 @@ module Graph = struct
   let add_path_to_reference t
       ~chromosome ~fork_position ~join_position ~sequence ~kind =
     begin (* find/create "forking" node *)
-      find_reference_node t ~chromosome ~position:fork_position
+      find_reference_node t ~from:(`Global_position (chromosome, fork_position))
       >>= fun  (reference_node, index, reference_sequence) ->
       babble "Shortcut starts at in %s (+%d %S)"
         (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
@@ -579,7 +587,7 @@ module Graph = struct
     end
     >>= fun forking_node ->
     begin (* find/create "joining" node *)
-      find_reference_node t ~chromosome ~position:join_position
+      find_reference_node t ~from:(`Global_position (chromosome, join_position))
       >>= fun  (reference_node, index, reference_sequence) ->
       babble "Shortcut joins at in %s (+%d %S)"
         (Node.to_string reference_node) index (Sequence.to_string reference_sequence);
@@ -620,7 +628,7 @@ module Graph = struct
     begin match variant.Variant.action with
     | `Insert ins ->
       (* find node, split there if needed, insert new path *)
-      find_reference_node t ~chromosome ~position
+      find_reference_node t ~from:(`Global_position (chromosome, position))
       >>= fun  (reference_node, index, seq) ->
       babble "Integrating in %s (+%d %S)"
         (Node.to_string reference_node) index (Sequence.to_string seq);
