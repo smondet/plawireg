@@ -425,19 +425,31 @@ module Graph = struct
       | `Node node -> add_last_node node
       | `None -> (* empty file ⇒ no roots *) return ()
 
+  let hack_cache_in_use = true
+  let hack_cache : (Node.t Pointer.t * string * int) option ref = ref None
+  let hack_cache_hits : int ref = ref 0
+  let hack_cache_misses : int ref = ref 0
+      
   let find_reference_node t ~from =
     let fail e = fail (`Graph e) in
-    begin match from with
-    | `Global_position (chromosome, position) ->
+    begin match from, !hack_cache with
+    | `Global_position (chromosome, position), Some (p, chr, pos)
+      when hack_cache_in_use && chromosome = chr && position >= pos ->
+      babble "Using HACCK !! %s:%d" chr position;
+      incr hack_cache_hits;
+      return (p, chromosome, position)
+    | `Global_position (chromosome, position), _ ->
+      babble "NOT Using HACCK !! %s:%d" chromosome position;
+      incr hack_cache_misses;
       (* very stupid implementation,
          and later we'll optimize with the right "addressing" *)
       begin match List.find t.roots (fun (r, _) -> r.chromosome = chromosome) with
       | None -> fail (`Node_not_found from)
       | Some (_, node_p) ->
-        return (node_p, position)
+        return (node_p, chromosome, position)
       end
     end
-    >>= fun (starting_node, position) ->
+    >>= fun (starting_node, chromosome, position) ->
     begin
       let stream = stream_of_node_pointer t starting_node in
       let rec find_stupidly current_position =
@@ -457,7 +469,10 @@ module Graph = struct
           >>= fun seq ->
           let lgth = Sequence.length seq in
           if current_position + lgth - 1 >=  position
-          then return (Some (node, position - current_position + 1, seq))
+          then begin
+            hack_cache := Some (Node.pointer node, chromosome, current_position);
+            return (Some (node, position - current_position + 1, seq))
+          end
           else find_stupidly (current_position + lgth)
         end
       in
@@ -671,11 +686,12 @@ module Graph = struct
           let variants = Variant.of_vcf_row_exn row in
           temp := variants :: !temp;
           Deferred_list.for_concurrent variants ~f:(fun variant ->
-              babble "Variant: %s" (Variant.to_string variant);
-              if line_number mod 1_000 = 0 then
-                dbg "[%s] %s:%d Variant: %s"
+              (* babble "Variant: %s" (Variant.to_string variant); *)
+              if is_babbling || line_number mod 50 = 0 then
+                dbg "[%s] %s:%d Variant: %s\n  hits: %d | misses: %d"
                   Time.(now () |> to_filename) path line_number
-                  (Variant.to_string variant);
+                  (Variant.to_string variant)
+                  !hack_cache_hits !hack_cache_misses;
               integrate_variant t ~variant)
           >>= fun ((_ : unit list), errors) ->
           begin match errors with
