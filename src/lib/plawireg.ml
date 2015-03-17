@@ -467,23 +467,27 @@ module Graph = struct
     | Some n -> return n
     | None -> fail (`Node_not_found from)
 
-  let get_reference_parent t ~node =
+  let get_parents t ~node how =
     Array.fold_left ~init:(return []) node.Node.prev ~f:(fun l_m pointer ->
         l_m >>= fun l ->
         Cache.get t.nodes (pointer.Pointer.id)
         >>= fun parent ->
         begin match parent.Node.kind with
         | `Db_snp _
-        | `Cosmic _ -> return l
+        | `Cosmic _ ->
+          return (match how with `Only_reference -> l | `All -> parent :: l)
         | `Reference ->
           return (parent :: l)
         end)
+      (*
     >>= function
+    | l -> return l
     | [] -> return None
     | s :: [] -> return (Some s)
     | more -> failwithf "Node %s has too many reference-parents: [%s]!"
                 (Node.to_string node)
                 (List.map more ~f:Node.to_string |> String.concat ~sep:", ")
+         *)
 
   let insert_node_before_reference t ~reference_node ~sequence ~variant =
     (* insert from there:
@@ -494,31 +498,28 @@ module Graph = struct
        - new_node.next = reference_node
     *)
     let open Node in
-    get_reference_parent t ~node:reference_node
-    >>= fun parent_opt ->
+    get_parents t ~node:reference_node `Only_reference
+    >>= fun parents ->
     store_new_sequence t ~sequence
     >>= fun sequence ->
     let new_node =
       let next = [| Node.pointer reference_node |] in
       let prev =
-        Option.value_map parent_opt ~f:(fun p -> [| pointer p |]) ~default:[| |]
-      in
+        List.map parents ~f:pointer |> Array.of_list in
       new_node t ~kind:(`Db_snp variant) ~sequence ~next ~prev
     in
     babble "New node: %s\n   goes before %s"
       (Node.to_string new_node) (Node.to_string reference_node);
     add_or_update_node t new_node
     >>= fun () ->
-    begin match parent_opt with
-    | None  -> return ()
-    | Some parent ->
-      let new_parent =
-        {parent with
-         next = Array.concat [parent.next; [| pointer new_node |] ]}
-      in
-      babble "Updated parent: %s" (Node.to_string new_parent);
-      add_or_update_node t new_parent
-    end
+    List.fold parents ~init:(return ()) ~f:(fun prev parent ->
+        prev >>= fun () ->
+        let new_parent =
+          {parent with
+           next = Array.concat [parent.next; [| pointer new_node |] ]}
+        in
+        babble "Updated parent: %s" (Node.to_string new_parent);
+        add_or_update_node t new_parent)
     >>= fun () ->
     add_or_update_node t 
       {reference_node with
@@ -582,10 +583,10 @@ module Graph = struct
         split_reference_node t ~reference_node ~index ~reference_sequence
       end
       >>= fun new_left_ref_node ->
-      get_reference_parent t ~node:new_left_ref_node
-      >>| Option.value_exn ~msg:(sprintf "new_left_ref_node has no parent?")
+      get_parents t ~node:new_left_ref_node `All
+      (* >>| Option.value_exn ~msg:(sprintf "new_left_ref_node has no parent?") *)
     end
-    >>= fun forking_node ->
+    >>= fun forking_nodes ->
     begin (* find/create "joining" node *)
       find_reference_node t ~from:(`Global_position (chromosome, join_position))
       >>= fun  (reference_node, index, reference_sequence) ->
@@ -605,7 +606,7 @@ module Graph = struct
     let open Node in
     let new_variant_node =
       let next = [| pointer joining_node |] in
-      let prev = [| pointer forking_node |] in
+      let prev = List.map forking_nodes ~f:pointer |> Array.of_list in
       new_node t ~kind ~sequence ~next ~prev
     in
     add_or_update_node t new_variant_node
@@ -615,9 +616,11 @@ module Graph = struct
          - forking_node.next += new_node
          - joining_node.prev += new_node
       *)
-    add_or_update_node t {
-      forking_node with
-      next = Array.append forking_node.next [| pointer new_variant_node |]}
+    List.fold forking_nodes ~init:(return ()) ~f:(fun prev forking_node ->
+        prev >>= fun () ->
+        add_or_update_node t {
+          forking_node with
+          next = Array.append forking_node.next [| pointer new_variant_node |]})
     >>= fun () ->
     add_or_update_node t {
       joining_node with
