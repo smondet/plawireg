@@ -8,10 +8,9 @@ Nothing really interesting to see for now …
 Build
 -----
 
-This project tries the `obuild` build-system:
+This project uses the `omake` build-system, just run:
 
-    obuild configure
-    obuild build
+    omake
 
 Run Tests
 ---------

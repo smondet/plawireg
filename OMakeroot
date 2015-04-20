@@ -1,0 +1,158 @@
+open build/OCaml
+DefineCommandVars()
+
+.PHONY: app lib doc \
+        install uninstall \
+        clean distclean
+
+clean:
+  rm -rf _build
+
+distclean: clean
+  rm -rf OMakefile.omc OMakeroot.omc .omakedb .omakedb.lock
+
+
+################################################################################
+# General Project Information
+PROJECT = plawireg
+VERSION = 0.0.0-dev
+DESCRIPTION = Play With The Reference Graph
+
+if $(test -e .git)
+  GIT_COMMIT = 'Some "$(shell git rev-parse HEAD)"'
+  export
+else
+  GIT_COMMIT = 'None'
+  export
+
+LIB_NAME = $(PROJECT)
+LIB_MODULES[] =
+  $(removesuffix $(removesuffix $(basename $(ls src/lib/*.ml))))
+LIB_PACKAGES = nonstd  pvem  pvem_lwt_unix  sosa
+
+APP_NAME = $(PROJECT)
+APP_MODULES[] =
+  $(removesuffix $(removesuffix $(basename $(ls src/app/*.ml))))
+APP_PACKAGES = $(LIB_PACKAGES)
+
+
+################################################################################
+# High-level Targets:
+
+app: ./plawireg
+./plawireg: _build/app/plawireg.opt
+    cp _build/app/plawireg.opt ./plawireg
+.DEFAULT: app
+
+.merlin:
+  rm -f .merlin
+  echo 'S ./src/app/' >> .merlin
+  echo 'S ./src/lib/' >> .merlin
+  echo 'B _build/app/' >> .merlin
+  echo 'B _build/lib' >> .merlin
+  foreach(m => ..., $(LIB_PACKAGES))
+    echo "PKG $(m)" >> .merlin
+
+################################################################################
+# Build Parameters
+
+################################################################################
+# Build Parameters
+USE_OCAMLFIND = true
+if $(not $(OCAMLFIND_EXISTS))
+  eprintln(This project requires ocamlfind, but it was not found.)
+  eprintln(You need to install ocamlfind and run "omake --configure".)
+  exit 1
+
+NATIVE_ENABLED = $(OCAMLOPT_EXISTS)
+BYTE_ENABLED = $(OCAMLC_EXISTS)
+
+OCAMLFLAGS = -bin-annot -thread -short-paths -safe-string
+OCAMLCFLAGS =
+OCAMLOPTFLAGS =
+OCAML_LINK_FLAGS +=
+OCAML_BYTE_LINK_FLAGS =
+OCAML_NATIVE_LINK_FLAGS =
+OCAMLFINDFLAGS =
+
+
+################################################################################
+# Sub-directories
+.SUBDIRS: .
+  mkdir -p _build/lib
+  mkdir -p _build/app
+  mkdir -p _build/doc
+  vmount(-l, src/lib/, _build/lib/)
+  vmount(-l, src/app/, _build/app/)
+
+  ##############################################################################
+  # Library
+  .SUBDIRS: _build/lib
+    OCAMLFINDFLAGS +=
+    OCAMLPACKS[] = $(LIB_PACKAGES)
+
+    lib: $(OCamlLibrary $(LIB_NAME), $(LIB_MODULES))
+
+    .DEFAULT: lib
+
+  ##############################################################################
+  # Application
+  .SUBDIRS: _build/app
+    OCAMLFINDFLAGS +=
+    OCAML_LIBS = ../lib/$(PROJECT)
+    OCAMLINCLUDES += $(dir ../lib/)
+    OCAMLPACKS[] = $(APP_PACKAGES)
+    
+    %.ml: ../lib/$(PROJECT).cmxa
+    .DEFAULT: $(OCamlProgram $(APP_NAME), $(APP_MODULES))
+
+
+  ##############################################################################
+  # Documentation
+  .SUBDIRS: _build/doc
+
+    api/index.html: ../lib/$(LIB_NAME).cma
+      rm -rf api
+      mkdir api
+      ocamlfind ocamldoc \
+        -package $(concat \,, $(LIB_PACKAGES)) \
+        -charset UTF-8 \
+        -d api \
+        -t "$(PROJECT) $(VERSION)" \
+        -keep-code \
+        -colorize-code \
+        -sort \
+        -I ../lib \
+        -thread \
+        -html \
+        ../src/lib/*.mli ../src/lib/*.ml
+
+    doc: api/index.html
+
+
+################################################################################
+# Install and Uninstall
+# - support for findlib and OPAM
+
+if $(not $(defined OPAM_PACKAGE_NAME))
+  OPAM_PACKAGE_NAME = $(PROJECT)
+  export
+
+_build/META: :value: $(VERSION) :value: $(DESCRIPTION)
+  echo "description = \"$(DESCRIPTION)\"" > $@
+  echo "version = \"$(VERSION)\"" >> $@
+  echo "requires = \"$(LIB_PACKAGES)\"" >> $@
+  echo "archive(byte) = \"$(LIB_NAME).cma\"" >> $@
+  echo "archive(native) = \"$(LIB_NAME).cmxa\"" >> $@
+  echo "archive(native,plugin) = \"$(LIB_NAME).cmxs\"" >> $@
+
+install: uninstall _build/META
+  ocamlfind install $(PROJECT) \
+    _build/lib/*.mli \
+    _build/META \
+    _build/lib/*.cm[aix] \
+    _build/lib/*.cmx[as] \
+    _build/lib/$(LIB_NAME).a
+
+uninstall:
+  ocamlfind remove $(PROJECT)

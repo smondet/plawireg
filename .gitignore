@@ -1,2 +1,6 @@
 dist/
 /plawireg
+/.omakedb
+/.omakedb.lock
+/OMakeroot.omc
+/_build/
