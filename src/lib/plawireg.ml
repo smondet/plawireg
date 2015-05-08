@@ -373,23 +373,37 @@ module Graph = struct
   let add_or_update_node t node =
     Cache.store t.nodes ~at:node.Node.id ~value:node
 
-  let load_reference: t -> path:string -> (unit, _) Deferred_result.t =
-    fun t ~path ->
-      (* let next_id = ref (Unique_id.create ()) in *)
-      (* let current_root = ref None in *)
-      let node_of_line ~line_number ~parent line =
-        begin match Sequence.of_string_exn line with
-        | s -> return s
-        | exception e -> fail (`Graph (`Load_fasta (path, line_number, e)))
+  module Linear_genome = struct
+    module Position = struct
+      type t = {chromosome: string; position: int}
+      let create chromosome position = {chromosome; position}
+      let add pos loci = {pos with position = pos.position + loci}
+      let in_range p chr p1 p2 =
+        p.chromosome = chr && p1 <= p.position && p.position <= p2
+    end
+
+    module Region = struct
+      type t = [
+        | `Everything
+        | `Range of string * int * int
+      ]
+      let contains reg ~position =
+        begin match reg with
+        | `Everything -> true
+        | `Range (chr, p1, p2) when Position.(in_range position chr p1 p2) ->
+          true
+        | _ -> false
         end
-        >>= fun sequence ->
-        store_new_sequence t ~sequence
-        >>= fun sequence_pointer ->
-        let prev = [| parent |] in
-        return (new_node t ~kind:`Reference
-                  ~sequence:sequence_pointer ~next:[| |] ~prev)
-      in
-      let root_key_of_line line =
+    end
+  end
+  module FASTA = struct
+    type event = [
+      | `Chromosome_line of string * string
+      | `Piece_of_DNA of string
+    ]
+    let event_of_line line =
+      if String.get line 0 = Some '>'
+      then begin
         let with_out_carret =
           String.(sub_exn line ~index:1 ~length:(length line - 1)) in
         match
@@ -398,52 +412,123 @@ module Graph = struct
             ~f:(fun s -> match String.strip s with "" -> None | st -> Some st)
         with
         | chromosome :: more :: than_one ->
-          {chromosome; comment = String.concat ~sep:" " (more :: than_one)}
+          `Chromosome_line (chromosome,
+                            String.concat ~sep:" " (more :: than_one))
         | other -> failwithf "Cannot find chromosome name: %S" line
-      in
-      let add_root line =
-        store_new_sequence t Sequence.empty
-        >>= fun sequence ->
-        let node =
-          new_node t ~kind:`Reference ~sequence ~next:[| |] ~prev:[| |] in
-        t.roots  <- t.roots @ [(root_key_of_line line, Node.pointer node)];
-        return (`Node node)
-      in
-      let add_last_node node =
-        store_new_sequence t Sequence.empty
-        >>= fun sequence ->
-        let last_node =
-          new_node t ~kind:`Reference ~sequence ~next:[| |]
-            ~prev:[| Node.pointer node |]
-        in
-        add_or_update_node t last_node
-        >>= fun () ->
-        babble "Last node: %s" (Node.to_string last_node);
-        add_or_update_node t {node with Node.next = [| Node.pointer last_node |]}
-      in
-      fold_lines path ~init:(`None) ~f:(fun ~line_number prev line ->
-          match prev, line with
-          | `None, line when String.get line 0 = Some '>' ->
-            add_root line
-          | `None, l ->
-            fail (`Graph (`Wrong_fasta (`First_line (path, line_number, l))))
-          | `Node node, line when String.get line 0 = Some '>' ->
-            add_last_node node
+      end else `Piece_of_DNA line
+
+    let update_position (event : event) ~position =
+      let open Linear_genome in
+      match event with
+      | `Chromosome_line (chr, _) -> Position.create chr 0
+      | `Piece_of_DNA dna -> Position.add position String.(length dna)
+  end
+
+  let load_reference:
+    ?packetization_threshold:int ->
+    ?region:Linear_genome.Region.t -> t ->
+    path:string -> (unit, _) Deferred_result.t =
+    fun ?(packetization_threshold = 200) ?(region = `Everything) t ~path ->
+      let state =
+        object (self)
+          val mutable current_node = None
+          val mutable current_sequence = []
+          method flush_sequence = 
+            begin match current_node with
+            | None -> return ()
+            | Some node ->
+              let full_seq = (String.concat ~sep:"" current_sequence) in
+              store_new_sequence t (Sequence.of_string_exn full_seq)
+              >>= fun sequence ->
+              current_sequence <- [];
+              babble "finalize: updating node : %s with seq: %s"
+                (Node.to_string node) (full_seq);
+              let updated =  {node with Node.sequence = sequence} in
+              current_node <- Some updated;
+              add_or_update_node t updated
+            end
+          method finalize =
+            self#flush_sequence
             >>= fun () ->
-            add_root line
-          | `Node node, line ->
-            node_of_line ~line_number ~parent:(Node.pointer node) line
-            >>= fun (new_node) ->
-            add_or_update_node t
-              {node with Node.next = [| Node.pointer new_node |] }
+            store_new_sequence t Sequence.empty
+            >>= fun sequence ->
+            let node =
+              new_node t ~kind:`Reference ~sequence ~next:[| |] ~prev:[| |] in
+            begin match current_node with
+            | None -> return [| |]
+            | Some current ->
+              add_or_update_node t
+                {current with Node.next = [|Node.pointer node|]}
+              >>= fun () ->
+              return [| Node.pointer current |]
+            end
+            >>= fun new_prev ->
+            add_or_update_node t { node with Node.prev = new_prev }
+          method new_root chromosome comment =
+            babble "new_root %s %s" chromosome comment;
+            self#finalize
             >>= fun () ->
-            return (`Node new_node)
+            store_new_sequence t Sequence.empty
+            >>= fun sequence ->
+            let first_node =
+              new_node t ~kind:`Reference ~sequence ~next:[| |] ~prev:[| |] in
+            let second_node =
+              new_node t ~kind:`Reference ~sequence ~next:[| |]
+                ~prev:[| Node.pointer first_node |] in
+            t.roots  <- t.roots @ [{chromosome; comment},
+                                   Node.pointer first_node];
+            add_or_update_node t {first_node with
+                                  Node.next = [| Node.pointer second_node |] }
+            >>= fun () ->
+            current_node <- Some second_node;
+            return ()
+          method add_dna dna =
+            current_sequence <- dna :: current_sequence;
+            let count =
+              List.fold current_sequence ~init:0
+                ~f:(fun x s -> x + String.length s) in
+            babble "Adding %s count: %d" dna count;
+            if count >= packetization_threshold then (
+              self#flush_sequence
+              >>= fun () ->
+              store_new_sequence t Sequence.empty
+              >>= fun sequence ->
+              let current = Option.value_exn current_node ~msg:"current_node" in
+              let node =
+                new_node t ~kind:`Reference ~sequence
+                  ~next:[| |]
+                  ~prev:[| Node.pointer current |] in
+              babble "add_dna: updating node : %s with next %s"
+                (Node.to_string current) (Node.to_string node);
+              add_or_update_node t {current with Node.next = [|Node.pointer node|]}
+              >>= fun () ->
+              current_node <- Some node;
+              return ()
+            ) else (
+              return ()
+            )
+        end
+      in
+      let init = Linear_genome.Position.create "" 0 in
+      fold_lines path ~init ~f:(fun ~line_number position line ->
+          let fasta_event = FASTA.event_of_line line in
+          let newpos = FASTA.update_position fasta_event ~position in
+          match fasta_event, region with
+          | `Chromosome_line (chr, comment), `Everything ->
+            (* when Linear_genome.Region.contains region ~position -> *)
+            state#new_root chr comment
+            >>= fun () ->
+            return newpos
+          | `Piece_of_DNA line, `Everything ->
+            state#add_dna line
+            >>= fun () ->
+            return newpos
+          | _, `Range _ -> failwithf "NOT IMPLEMENTED"
         )
         ~on_exn:(fun ~line_number e ->
             `Graph (`Load_fasta (path, line_number, e)))
-      >>= function
-      | `Node node -> add_last_node node
-      | `None -> (* empty file ⇒ no roots *) return ()
+      >>= fun last_pos ->
+      state#finalize
 
   let find_reference_node t ~from =
     let fail e = fail (`Graph e) in
