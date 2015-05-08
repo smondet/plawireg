@@ -226,7 +226,7 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
   print_stats "last one" >>= fun () ->
   return ()
 
-let benchmark ~fasta ~dbsnp ~region_string ~packetizations =
+let benchmark ~fasta ~dbsnp ~region_string ~packetizations ~output_file =
   let open Plawireg in
   let region = Linear_genome.Region.of_string_exn region_string in
   List.fold ~init:(return []) packetizations ~f:(fun prev_m pack ->
@@ -248,13 +248,31 @@ let benchmark ~fasta ~dbsnp ~region_string ~packetizations =
               :: prev))
   >>| List.rev
   >>= fun benches ->
-  printf "| Packetization | Load FASTA | Load VCF | Count nodes |\n\
-          |---------------|------------|----------|-------------|\n";
-  List.iter benches ~f:(fun (pack,  start, loadref, loadvcf, counts) ->
-      printf "|  %d    |    %f |  %f | %f |\n"
-        pack (loadref -. start) (loadvcf -. loadref) (counts -. loadvcf);
-    );
-  return ()
+  IO.with_out_channel (`Append_to_file output_file) ~f:begin fun out ->
+    IO.write out (
+      sprintf "### Benchmark %s\n\n\
+               * Region: %s\n\
+               * FASTA: %s\n\
+               * VCF: %s\n\
+               \n"
+        Time.(now () |> to_filename)
+        Linear_genome.Region.(show region)
+        fasta dbsnp
+    )
+    >>= fun () ->
+    IO.write out (
+      sprintf "| Packetization | Load FASTA | Load VCF | Count nodes |\n\
+               |---------------|------------|----------|-------------|\n")
+    >>= fun () ->
+    Deferred_list.while_sequential benches
+      ~f:(fun (pack,  start, loadref, loadvcf, counts) ->
+          IO.write out (
+            sprintf "|  %d    |    %f |  %f | %f |\n"
+              pack (loadref -. start) (loadvcf -. loadref) (counts -. loadvcf))
+        )
+    >>= fun _ ->
+    IO.write out "\n\n\n"
+  end
 
 let () =
   let to_do =
@@ -271,12 +289,12 @@ let () =
         Int.of_string packetize |> Option.value_exn ~msg:"packetize argument" in
       test_load ~region_string ~memory_stats ~fasta ~dbsnp
         ~packetization_threshold
-    | "bench" :: fasta :: vcf :: region_string :: packets :: [] ->
+    | "bench" :: fasta :: vcf :: region_string :: packets :: output_file :: [] ->
       let packetizations =
         String.split packets ~on:(`Character ',')
         |> List.filter_map  ~f:Int.of_string in
       benchmark ~fasta ~dbsnp:vcf ~region_string 
-        ~packetizations
+        ~packetizations ~output_file
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Plawireg.Unique_id.test ());
