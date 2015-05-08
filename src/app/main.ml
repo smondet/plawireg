@@ -226,6 +226,36 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
   print_stats "last one" >>= fun () ->
   return ()
 
+let benchmark ~fasta ~dbsnp ~region_string ~packetizations =
+  let open Plawireg in
+  let region = Linear_genome.Region.of_string_exn region_string in
+  List.fold ~init:(return []) packetizations ~f:(fun prev_m pack ->
+      prev_m >>= fun prev ->
+      Graph.create ()
+      >>= fun graph ->
+      let start = Time.now () in
+      Plawireg.Graph.load_reference graph ~path:fasta ~region
+        ~packetization_threshold:pack
+      >>= fun () ->
+      let after_load_ref = Time.now () in
+      Plawireg.Graph.add_vcf graph ~path:dbsnp ~region
+      >>= fun () ->
+      let after_load_vcf = Time.now () in
+      Plawireg.Graph.count_nodes graph
+      >>= fun counts ->
+      let after_counts = Time.now () in
+      return ((pack, start, after_load_ref, after_load_vcf, after_counts)
+              :: prev))
+  >>| List.rev
+  >>= fun benches ->
+  printf "| Packetization | Load FASTA | Load VCF | Count nodes |\n\
+          |---------------|------------|----------|-------------|\n";
+  List.iter benches ~f:(fun (pack,  start, loadref, loadvcf, counts) ->
+      printf "|  %d    |    %f |  %f | %f |\n"
+        pack (loadref -. start) (loadvcf -. loadref) (counts -. loadvcf);
+    );
+  return ()
+
 let () =
   let to_do =
     match Sys.argv |> Array.to_list |> List.tl_exn with
@@ -241,6 +271,12 @@ let () =
         Int.of_string packetize |> Option.value_exn ~msg:"packetize argument" in
       test_load ~region_string ~memory_stats ~fasta ~dbsnp
         ~packetization_threshold
+    | "bench" :: fasta :: vcf :: region_string :: packets :: [] ->
+      let packetizations =
+        String.split packets ~on:(`Character ',')
+        |> List.filter_map  ~f:Int.of_string in
+      benchmark ~fasta ~dbsnp:vcf ~region_string 
+        ~packetizations
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Plawireg.Unique_id.test ());
