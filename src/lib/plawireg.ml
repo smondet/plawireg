@@ -49,8 +49,8 @@ end = struct
 
   let circular_int = ref 0L
   let create () =
-    (* we take a piece of 
-       the mantissa (bits 51 to 0) of the current time 
+    (* we take a piece of
+       the mantissa (bits 51 to 0) of the current time
        and stick an increasing number to its right *)
     let now = Unix.gettimeofday () in
     let shift_size = 24 in
@@ -136,6 +136,79 @@ end = struct
     (String.sub_exn s ~index:0 ~length:(before - 1),
      String.sub_exn s ~index:(before - 1) ~length:(String.length s - before +  1))
 end
+
+
+module Linear_genome = struct
+  module Position = struct
+    type t = {chromosome: string; position: int}
+    let create chromosome position = {chromosome; position}
+    let add pos loci = {pos with position = pos.position + loci}
+    let in_range p chr p1 p2 =
+      p.chromosome = chr && p1 <= p.position && p.position <= p2
+  end
+
+  module Region = struct
+    type t = [
+      | `Everything
+      | `Range of string * int * int
+    ]
+    let contains reg ~position =
+      begin match reg with
+      | `Everything -> true
+      | `Range (chr, p1, p2) when Position.(in_range position chr p1 p2) ->
+        true
+      | _ -> false
+      end
+
+    let range pos1 pos2 =
+      let open Position in
+      if pos1.chromosome = pos2.chromosome
+      then Some (`Range (pos1.chromosome, pos1.position, pos2.position))
+      else None
+
+    let interesting_chromosome (reg : t) chr =
+      match reg with
+      | `Everything -> true
+      | `Range (c, _, _) -> c = chr
+
+    let intersection reg1 reg2 =
+      match reg1, reg2 with
+      | `Everything, other -> Some other
+      | other, `Everything -> Some other
+      | `Range (c1, b1, e1), `Range (c2, b2, e2) when c1 = c2 ->
+        Some (`Range (c1, max b1 b2, min e1 e2))
+      | `Range _, `Range _ -> None
+
+    let sub_string reg {Position. chromosome; position} str =
+      match reg with
+      | `Everything -> Some str
+      | `Range (chr, b, e) when chr = chromosome ->
+        let index =
+          if b <= position then 0 else b - position in
+        let length =
+          let sl = String.length str in
+          if position + sl <= e
+          then sl - index
+          else 1 + sl - index - (position + sl - e)
+        in
+        if length > 0
+        then Some (String.sub_exn str ~index ~length)
+        else None
+      | _ -> None
+          (*
+             let test rb re pos str =
+                sub_string (`Range ("1", rb, re)) {chromosome = "1"; position = pos} str
+             test 1 100 1 "bouh"
+             test 1 100 4 "bouh"
+             test 6 100 4 "bouh"
+             test 5 6 4 "bouh"
+             test 1 100 100 "bouh"
+             test 1 100 101 "bouh"
+             *)
+  end
+end
+
+
 module Variant = struct
   type t = {
     name: string;
@@ -145,8 +218,7 @@ module Variant = struct
       | `Delete of int
       | `Insert of Sequence.t
     ];
-  }
-  [@@deriving show, yojson]
+  } [@@deriving show, yojson]
   let create ~name ~position action = {name; position; action}
   let replace ~name ~at (ref, alt) =
     create ~name ~position:at (`Replace (ref, alt))
@@ -162,6 +234,24 @@ module Variant = struct
       | `Delete (nb) -> sprintf "%dx" nb)
       chr pos
 
+  let intersect_region t reg =
+    match reg with
+    | `Everything -> Some t
+    | `Range (chr, b, e) when chr <> fst t.position -> None
+    | `Range (chr, b, e) ->
+      let loc = snd t.position in
+      if b <= loc && loc <= e
+      then Some {t with position = (chr, loc - b + 1)}
+      else None
+  (* TODO:
+     be more clever and cut the variants that are at the border to make them fit
+     begin match t.action with
+     | `Insert seq when loc
+     | `Delete _
+     | `Replace _
+     end
+  *)
+
   let of_vcf_row_exn row =
     let columns = String.split ~on:(`Character '\t') row in
     (* dbg "Row: %s" (String.concat ~sep:", " columns); *)
@@ -173,7 +263,7 @@ module Variant = struct
       match columns with
       | chrs :: poss :: name :: ref :: alt :: _ ->
         (chrs, ios poss, name, ref, String.split ~on:(`Character ',') alt)
-      | other -> 
+      | other ->
         failwithf "Not enough columns: %S" row
     in
     let variants =
@@ -296,7 +386,7 @@ module Graph = struct
        | [] -> return None
        end)
 
-  let stream_of_root t ~name = 
+  let stream_of_root t ~name =
     match List.find t.roots ~f:(fun (n, _) -> n = name) with
     | None -> (fun () -> return None)
     | Some (_, node_p) ->
@@ -340,7 +430,7 @@ module Graph = struct
 
   let fold_lines path ~on_exn ~init ~f : (_, _) Deferred_result.t  =
     let stream = Lwt_io.lines_of_file path in
-    let rec loop line_number prev = 
+    let rec loop line_number prev =
       wrap_deferred ~on_exn:(on_exn ~line_number)
         (fun () -> Lwt_stream.get stream)
       >>= begin function
@@ -372,78 +462,6 @@ module Graph = struct
 
   let add_or_update_node t node =
     Cache.store t.nodes ~at:node.Node.id ~value:node
-
-  module Linear_genome = struct
-    module Position = struct
-      type t = {chromosome: string; position: int}
-      let create chromosome position = {chromosome; position}
-      let add pos loci = {pos with position = pos.position + loci}
-      let in_range p chr p1 p2 =
-        p.chromosome = chr && p1 <= p.position && p.position <= p2
-    end
-
-    module Region = struct
-      type t = [
-        | `Everything
-        | `Range of string * int * int
-      ]
-      let contains reg ~position =
-        begin match reg with
-        | `Everything -> true
-        | `Range (chr, p1, p2) when Position.(in_range position chr p1 p2) ->
-          true
-        | _ -> false
-        end
-
-      let range pos1 pos2 =
-        let open Position in
-        if pos1.chromosome = pos2.chromosome
-        then Some (`Range (pos1.chromosome, pos1.position, pos2.position))
-        else None
-
-      let interesting_chromosome (reg : t) chr =
-        match reg with
-        | `Everything -> true
-        | `Range (c, _, _) -> c = chr
-
-      let intersection reg1 reg2 =
-        match reg1, reg2 with
-        | `Everything, other -> Some other
-        | other, `Everything -> Some other
-        | `Range (c1, b1, e1), `Range (c2, b2, e2) when c1 = c2 ->
-          Some (`Range (c1, max b1 b2, min e1 e2))
-        | `Range _, `Range _ -> None
-
-      let sub_string reg {Position. chromosome; position} str =
-        match reg with
-        | `Everything -> Some str
-        | `Range (chr, b, e) when chr = chromosome ->
-          let index =
-            if b <= position then 0 else b - position in
-          let length =
-            let sl = String.length str in
-            if position + sl <= e
-            then sl - index
-            else 1 + sl - index - (position + sl - e)                
-          in
-          if length > 0
-          then Some (String.sub_exn str ~index ~length)
-          else None
-        | _ -> None
-          (*
-             let test rb re pos str =
-                sub_string (`Range ("1", rb, re)) {chromosome = "1"; position = pos} str
-             test 1 100 1 "bouh"
-             test 1 100 4 "bouh"
-             test 6 100 4 "bouh"
-             test 5 6 4 "bouh"
-             test 1 100 100 "bouh"
-             test 1 100 101 "bouh"
-             *)
-
-    end
-
-  end
 
   module FASTA = struct
     type event = [
@@ -483,7 +501,7 @@ module Graph = struct
         object (self)
           val mutable current_node = None
           val mutable current_sequence = []
-          method flush_sequence = 
+          method flush_sequence =
             begin match current_node with
             | None -> return ()
             | Some node ->
@@ -681,7 +699,7 @@ module Graph = struct
         babble "Updated parent: %s" (Node.to_string new_parent);
         add_or_update_node t new_parent)
     >>= fun () ->
-    add_or_update_node t 
+    add_or_update_node t
       {reference_node with
        prev = Array.concat [reference_node.prev; [| pointer new_node |] ]}
 
@@ -690,7 +708,7 @@ module Graph = struct
            - split the reference_node in two
                - new_node: seq: after, prev: ref_node, child: = refnode.children
                - reference_node.seq = prefix
-               - replace prev in child of reference_node: (prev 
+               - replace prev in child of reference_node: (prev
         *)
     let before, after = Sequence.split_exn reference_sequence ~before:index in
     store_new_sequence t ~sequence:before
@@ -710,7 +728,7 @@ module Graph = struct
     add_or_update_node t new_ref_node
     >>= fun () ->
     (* Delete old sequence? *)
-    add_or_update_node t 
+    add_or_update_node t
       {reference_node with
        sequence = before_sequence;
        next = [| Node.pointer new_ref_node |]}
@@ -819,8 +837,10 @@ module Graph = struct
     end
 
 
-  let add_vcf: t -> path:string -> (unit, _) Deferred_result.t =
-    fun t ~path ->
+  let add_vcf:
+    ?region:Linear_genome.Region.t -> t -> path:string ->
+    (unit, _) Deferred_result.t =
+    fun ?(region=`Everything) t ~path ->
       let temp = ref [] in
       fold_lines path ~init:() ~f:begin fun ~line_number () line ->
         match line with
@@ -831,12 +851,16 @@ module Graph = struct
           let variants = Variant.of_vcf_row_exn row in
           temp := variants :: !temp;
           Deferred_list.for_concurrent variants ~f:(fun variant ->
-              babble "Variant: %s" (Variant.to_string variant);
-              if line_number mod 1_000 = 0 then
-                dbg "[%s] %s:%d Variant: %s"
-                  Time.(now () |> to_filename) path line_number
-                  (Variant.to_string variant);
-              integrate_variant t ~variant)
+              match Variant.intersect_region variant region with
+              | Some variant ->
+                babble "Variant: %s" (Variant.to_string variant);
+                if line_number mod 1_000 = 0 then
+                  dbg "[%s] %s:%d Variant: %s"
+                    Time.(now () |> to_filename) path line_number
+                    (Variant.to_string variant);
+                integrate_variant t ~variant
+              | None -> return ()
+            )
           >>= fun ((_ : unit list), errors) ->
           begin match errors with
           | [] -> return ()
