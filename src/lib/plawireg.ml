@@ -152,14 +152,6 @@ module Linear_genome = struct
       | `Everything
       | `Range of string * int * int
     ]
-    let contains reg ~position =
-      begin match reg with
-      | `Everything -> true
-      | `Range (chr, p1, p2) when Position.(in_range position chr p1 p2) ->
-        true
-      | _ -> false
-      end
-
     let range pos1 pos2 =
       let open Position in
       if pos1.chromosome = pos2.chromosome
@@ -170,14 +162,6 @@ module Linear_genome = struct
       match reg with
       | `Everything -> true
       | `Range (c, _, _) -> c = chr
-
-    let intersection reg1 reg2 =
-      match reg1, reg2 with
-      | `Everything, other -> Some other
-      | other, `Everything -> Some other
-      | `Range (c1, b1, e1), `Range (c2, b2, e2) when c1 = c2 ->
-        Some (`Range (c1, max b1 b2, min e1 e2))
-      | `Range _, `Range _ -> None
 
     let sub_string reg {Position. chromosome; position} str =
       match reg with
@@ -585,7 +569,6 @@ module Graph = struct
           match fasta_event with
           | `Chromosome_line (chr, comment)
             when Region.interesting_chromosome region chr ->
-            (* when Linear_genome.Region.contains region ~position -> *)
             state#new_root chr comment
             >>= fun () ->
             return newpos
