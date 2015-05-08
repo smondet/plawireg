@@ -28,7 +28,7 @@ else
 LIB_NAME = $(PROJECT)
 LIB_MODULES[] =
   $(removesuffix $(removesuffix $(basename $(ls src/lib/*.ml))))
-LIB_PACKAGES = nonstd  pvem  pvem_lwt_unix  sosa
+LIB_PACKAGES = nonstd  pvem  pvem_lwt_unix  sosa ppx_deriving.std ppx_deriving_yojson
 
 APP_NAME = $(PROJECT)
 APP_MODULES[] =

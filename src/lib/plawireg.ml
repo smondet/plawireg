@@ -20,6 +20,7 @@ module Exn = struct
 end
 module Time = struct
   type t = float
+  [@@deriving show, yojson]
   let now () : t = Unix.gettimeofday ()
   let to_filename f =
     let open Unix in
@@ -38,11 +39,13 @@ end
 (** Provide pseudo-unique identifiers. *)
 module Unique_id : sig
   type t
+  [@@deriving show, yojson]
   val create: unit -> t
   val to_string: t -> string
   val test: unit -> float
 end = struct
   type t = Int64.t
+  [@@deriving show, yojson]
 
   let circular_int = ref 0L
   let create () =
@@ -76,11 +79,22 @@ end = struct
     let the_end = Unix.gettimeofday () in
     (the_end -. start)
 end
-module Pointer = struct
+module Pointer: sig
   type id = Unique_id.t
+  [@@deriving show, yojson]
+  type 'a t
+  [@@deriving show, yojson]
+  val create: id -> 'a t
+  val to_string: 'a t -> string
+  val id: 'a t -> id
+end = struct
+  type id = Unique_id.t
+  [@@deriving show, yojson]
   type 'a t = {id : id}
+  [@@deriving show, yojson]
   let create id = {id}
   let to_string {id} = Unique_id.to_string id
+  let id {id} = id
 end
 module Cache = struct
   type 'a t = (Pointer.id, 'a) Hashtbl.t
@@ -103,6 +117,7 @@ end
 
 module Sequence: sig
   type t (* 1-based pseudo-strings *)
+  [@@deriving show, yojson]
   val empty: t
   val of_string_exn: string -> t
   val to_string: t -> string
@@ -112,6 +127,7 @@ module Sequence: sig
   (** In Vim: i^M :) *)
 end = struct
   type t = string
+  [@@deriving show, yojson]
   let empty = ""
   let of_string_exn s = s
   let to_string a = a
@@ -130,6 +146,7 @@ module Variant = struct
       | `Insert of Sequence.t
     ];
   }
+  [@@deriving show, yojson]
   let create ~name ~position action = {name; position; action}
   let replace ~name ~at (ref, alt) =
     create ~name ~position:at (`Replace (ref, alt))
@@ -194,6 +211,7 @@ module Variant = struct
     variants
 
 end
+
 module Node = struct
   type t = {
     id: Pointer.id;
@@ -202,6 +220,7 @@ module Node = struct
     next: t Pointer.t array;
     prev: t Pointer.t array;
   }
+  [@@deriving yojson]
   let pointer t = Pointer.create t.id
   let to_string { id; kind; sequence; next; prev } =
     let of_array name arr =
@@ -221,6 +240,7 @@ module Node = struct
 end
 module Graph = struct
   type root_key = {chromosome: string; comment: string}
+  [@@deriving show, yojson]
   type t = {
     sequences: Sequence.t Cache.t;
     nodes: Node.t Cache.t;
@@ -262,13 +282,13 @@ module Graph = struct
        let open Node in
        begin match !stack_of_nodes with
        | node_p :: more ->
-         visited_nodes := node_p.Pointer.id :: !visited_nodes;
-         Cache.get t.nodes node_p.Pointer.id
+         visited_nodes := Pointer.id node_p :: !visited_nodes;
+         Cache.get t.nodes (Pointer.id node_p)
          >>= fun node ->
          (* inline implementation of a reverse-append-array-to-stack-list: *)
          stack_of_nodes := more;
          for i = Array.length node.next - 1 downto 0 do
-           if List.mem node.next.(i).Pointer.id ~set:!visited_nodes
+           if List.mem (Pointer.id node.next.(i)) ~set:!visited_nodes
            then ()
            else stack_of_nodes := node.next.(i) :: !stack_of_nodes
          done;
@@ -314,7 +334,7 @@ module Graph = struct
 
   let expand_node t ~node =
     let open Node in
-    Cache.get t.sequences node.sequence.Pointer.id
+    Cache.get t.sequences (Pointer.id node.sequence)
     >>= fun sequence ->
     return (node.id, node.kind, sequence)
 
@@ -453,7 +473,7 @@ module Graph = struct
           (* last node *)
           return (Some (node, 1, Sequence.empty))
         | Some node ->
-          Cache.get t.sequences node.Node.sequence.Pointer.id
+          Cache.get t.sequences (Pointer.id node.Node.sequence)
           >>= fun seq ->
           let lgth = Sequence.length seq in
           if current_position + lgth - 1 >=  position
@@ -470,7 +490,7 @@ module Graph = struct
   let get_parents t ~node how =
     Array.fold_left ~init:(return []) node.Node.prev ~f:(fun l_m pointer ->
         l_m >>= fun l ->
-        Cache.get t.nodes (pointer.Pointer.id)
+        Cache.get t.nodes (Pointer.id pointer)
         >>= fun parent ->
         begin match parent.Node.kind with
         | `Db_snp _
@@ -558,11 +578,11 @@ module Graph = struct
     Array.fold_left reference_node.next ~init:(return ())
       ~f:(fun unitm child ->
           unitm >>= fun () ->
-          Cache.get t.nodes child.Pointer.id
+          Cache.get t.nodes (Pointer.id child)
           >>= fun child_node ->
           let prev =
             Array.map child_node.prev ~f:(fun pointer ->
-                if pointer.Pointer.id = reference_node.id
+                if Pointer.id pointer = reference_node.id
                 then Pointer.create new_ref_node.id
                 else pointer) in
           add_or_update_node t {child_node with prev})

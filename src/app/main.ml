@@ -28,7 +28,7 @@ let generate_test_fasta ~path =
     "ACGTC";
     "CAGCN"; (* 21 -- 25 *)
     "CCACG";
-    "CATTT"; (* 31 -- 32 *)
+    "CATTT"; (* 31 -- 35 *)
     "CCAGT";
   ] in
   write_lines ~path (List.concat [
@@ -109,6 +109,7 @@ let test_load ~memory_stats ~fasta ~dbsnp =
   print_stats "before load_reference" >>= fun () ->
   Plawireg.Graph.load_reference graph ~path:fasta
   >>= fun () ->
+  (* exit 0 |> ignore; *)
   print_stats "before add_vcf" >>= fun () ->
   Plawireg.Graph.add_vcf graph ~path:dbsnp
   >>= fun () ->
@@ -154,11 +155,13 @@ let test_load ~memory_stats ~fasta ~dbsnp =
           fprintf o "N_%s [label=%S,shape=%s,color=%s,\
                      fontname=\"monospace\",fontsize=18];\n"
             (id node.id) label shape color;
-          Array.iter node.next ~f:(fun {Plawireg.Pointer. id = child} ->
-              fprintf o "N_%s -> N_%s[color=red];\n" (id node.id) (id child);
+          Array.iter node.next ~f:(fun child ->
+              let cid = Plawireg.Pointer.id  child in
+              fprintf o "N_%s -> N_%s[color=red];\n" (id node.id) (id cid);
             );
-          Array.iter node.prev ~f:(fun {Plawireg.Pointer. id = parent} ->
-              fprintf o "N_%s -> N_%s[color=blue];\n" (id node.id) (id parent);
+          Array.iter node.prev ~f:(fun parent ->
+              let cid = Plawireg.Pointer.id parent in
+              fprintf o "N_%s -> N_%s[color=blue];\n" (id node.id) (id cid);
             );
           return in_subgraph
         )
