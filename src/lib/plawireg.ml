@@ -140,7 +140,7 @@ end
 
 module Linear_genome = struct
   module Position = struct
-    type t = {chromosome: string; position: int}
+    type t = {chromosome: string; position: int} [@@deriving show,yojson]
     let create chromosome position = {chromosome; position}
     let add pos loci = {pos with position = pos.position + loci}
     let in_range p chr p1 p2 =
@@ -151,7 +151,7 @@ module Linear_genome = struct
     type t = [
       | `Everything
       | `Range of string * int * int
-    ]
+    ] [@@deriving show,yojson]
     let range pos1 pos2 =
       let open Position in
       if pos1.chromosome = pos2.chromosome
@@ -845,19 +845,20 @@ module Graph = struct
       fold_lines path ~init:() ~f:begin fun ~line_number () line ->
         match line with
         | comment when String.get comment ~index:0 = Some '#' ->
-          dbg "Comment: %s" comment;
+          babble "Comment: %s" comment;
           return ()
         | row ->
           let variants = Variant.of_vcf_row_exn row in
-          temp := variants :: !temp;
           Deferred_list.for_concurrent variants ~f:(fun variant ->
+              if line_number mod 100_000 = 0 then
+                dbg "[%s] %s:%d Variant: %s (temp: %d)"
+                  Time.(now () |> to_filename) path line_number
+                  (Variant.to_string variant)
+                  (List.length !temp) ;
               match Variant.intersect_region variant region with
               | Some variant ->
                 babble "Variant: %s" (Variant.to_string variant);
-                if line_number mod 1_000 = 0 then
-                  dbg "[%s] %s:%d Variant: %s"
-                    Time.(now () |> to_filename) path line_number
-                    (Variant.to_string variant);
+                temp := variant :: !temp;
                 integrate_variant t ~variant
               | None -> return ()
             )
@@ -873,15 +874,14 @@ module Graph = struct
             `Graph (`Load_vcf (path, line_number, e)))
       >>= fun () ->
       let snv, ins, del, repl =
-        List.fold !temp ~init:(0,0,0,0) ~f:(fun init variants ->
-            List.fold variants ~init ~f:(fun (snv, ins, del, repl) v ->
-                match v.Variant.action with
-                | `Replace (a, b)
-                  when Sequence.length a = 1 && Sequence.length b = 1 ->
-                  (snv + 1, ins, del, repl)
-                | `Replace _ -> (snv, ins, del, repl + 1)
-                | `Insert _ -> (snv, ins + 1, del, repl)
-                | `Delete _ -> (snv, ins, del + 1, repl)))
+        List.fold !temp ~init:(0,0,0,0) ~f:(fun (snv, ins, del, repl) v ->
+            match v.Variant.action with
+            | `Replace (a, b)
+              when Sequence.length a = 1 && Sequence.length b = 1 ->
+              (snv + 1, ins, del, repl)
+            | `Replace _ -> (snv, ins, del, repl + 1)
+            | `Insert _ -> (snv, ins + 1, del, repl)
+            | `Delete _ -> (snv, ins, del + 1, repl))
       in
       dbg "Variants: %d “lines”, %d snvs, %d ins, %d dels, %d repls"
         (List.length !temp) snv ins del repl;
