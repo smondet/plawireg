@@ -394,8 +394,57 @@ module Graph = struct
           true
         | _ -> false
         end
+
+      let range pos1 pos2 =
+        let open Position in
+        if pos1.chromosome = pos2.chromosome
+        then Some (`Range (pos1.chromosome, pos1.position, pos2.position))
+        else None
+
+      let interesting_chromosome (reg : t) chr =
+        match reg with
+        | `Everything -> true
+        | `Range (c, _, _) -> c = chr
+
+      let intersection reg1 reg2 =
+        match reg1, reg2 with
+        | `Everything, other -> Some other
+        | other, `Everything -> Some other
+        | `Range (c1, b1, e1), `Range (c2, b2, e2) when c1 = c2 ->
+          Some (`Range (c1, max b1 b2, min e1 e2))
+        | `Range _, `Range _ -> None
+
+      let sub_string reg {Position. chromosome; position} str =
+        match reg with
+        | `Everything -> Some str
+        | `Range (chr, b, e) when chr = chromosome ->
+          let index =
+            if b <= position then 0 else b - position in
+          let length =
+            let sl = String.length str in
+            if position + sl <= e
+            then sl - index
+            else sl - index - (position + sl - e)                
+          in
+          if length > 0
+          then Some (String.sub_exn str ~index ~length)
+          else None
+        | _ -> None
+          (*
+             let test rb re pos str =
+                sub_string (`Range ("1", rb, re)) {chromosome = "1"; position = pos} str
+             test 1 100 1 "bouh"
+             test 1 100 4 "bouh"
+             test 6 100 4 "bouh"
+             test 5 6 4 "bouh"
+             test 1 100 100 "bouh"
+             test 1 100 101 "bouh"
+             *)
+
     end
+
   end
+
   module FASTA = struct
     type event = [
       | `Chromosome_line of string * string
@@ -420,13 +469,14 @@ module Graph = struct
     let update_position (event : event) ~position =
       let open Linear_genome in
       match event with
-      | `Chromosome_line (chr, _) -> Position.create chr 0
+      | `Chromosome_line (chr, _) -> Position.create chr 1
       | `Piece_of_DNA dna -> Position.add position String.(length dna)
   end
 
   let load_reference:
     ?packetization_threshold:int ->
-    ?region:Linear_genome.Region.t -> t ->
+    ?region:Linear_genome.Region.t ->
+    t ->
     path:string -> (unit, _) Deferred_result.t =
     fun ?(packetization_threshold = 200) ?(region = `Everything) t ~path ->
       let state =
@@ -509,21 +559,26 @@ module Graph = struct
             )
         end
       in
-      let init = Linear_genome.Position.create "" 0 in
+      let open Linear_genome in
+      let init = Position.create "" 0 in
       fold_lines path ~init ~f:(fun ~line_number position line ->
           let fasta_event = FASTA.event_of_line line in
           let newpos = FASTA.update_position fasta_event ~position in
-          match fasta_event, region with
-          | `Chromosome_line (chr, comment), `Everything ->
+          match fasta_event with
+          | `Chromosome_line (chr, comment)
+            when Region.interesting_chromosome region chr ->
             (* when Linear_genome.Region.contains region ~position -> *)
             state#new_root chr comment
             >>= fun () ->
             return newpos
-          | `Piece_of_DNA line, `Everything ->
-            state#add_dna line
+          | `Chromosome_line (chr, comment) -> return newpos
+          | `Piece_of_DNA line ->
+            begin match Region.sub_string region position line with
+            | Some str -> state#add_dna str
+            | None -> return ()
+            end
             >>= fun () ->
             return newpos
-          | _, `Range _ -> failwithf "NOT IMPLEMENTED"
         )
         ~on_exn:(fun ~line_number e ->
             `Graph (`Load_fasta (path, line_number, e)))
