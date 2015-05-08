@@ -148,7 +148,6 @@ _build/META: :value: $(VERSION) :value: $(DESCRIPTION)
 
 install: uninstall _build/META
   ocamlfind install $(PROJECT) \
-    _build/lib/*.mli \
     _build/META \
     _build/lib/*.cm[aix] \
     _build/lib/*.cmx[as] \
