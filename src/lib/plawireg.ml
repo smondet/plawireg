@@ -158,6 +158,23 @@ module Linear_genome = struct
       then Some (`Range (pos1.chromosome, pos1.position, pos2.position))
       else None
 
+    let of_string_exn s =
+      match String.split s ~on:(`Character ':') with
+      | chr :: reg :: [] ->
+        begin match String.split reg ~on:(`Character '-') with
+        | b :: e :: [] ->
+          let parse_int i =
+            Int.of_string i
+            |> Option.value_exn ~msg:"Region.of_string: Not an integer"
+          in
+          `Range (chr, parse_int b, parse_int e)
+        | other ->
+          failwithf "Region.of_string_exn: can't parse: %S" reg
+        end
+      | ["all"] -> `Everything
+      | other ->
+        failwithf "Region.of_string_exn: can't parse: %S" s
+
     let interesting_chromosome (reg : t) chr =
       match reg with
       | `Everything -> true
