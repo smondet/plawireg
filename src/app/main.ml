@@ -87,7 +87,8 @@ let generate_test_dbnsp ~path =
       ~name:"del-TN-or-subs-G" ;
   ]
 
-let test_load ~memory_stats ~fasta ~dbsnp =
+let test_load ~region_string ~memory_stats ~fasta ~dbsnp
+    ~packetization_threshold =
   let print_stats msg =
     if memory_stats then
       begin
@@ -107,11 +108,13 @@ let test_load ~memory_stats ~fasta ~dbsnp =
   Plawireg.Graph.create ()
   >>= fun graph ->
   print_stats "before load_reference" >>= fun () ->
-  Plawireg.Graph.load_reference graph ~path:fasta
+  let region = Plawireg.Linear_genome.Region.of_string_exn region_string in
+  Plawireg.Graph.load_reference graph ~path:fasta ~region
+    ~packetization_threshold
   >>= fun () ->
   (* exit 0 |> ignore; *)
   print_stats "before add_vcf" >>= fun () ->
-  Plawireg.Graph.add_vcf graph ~path:dbsnp
+  Plawireg.Graph.add_vcf graph ~path:dbsnp ~region
   >>= fun () ->
   print_stats "before count_nodes" >>= fun () ->
   Plawireg.Graph.count_nodes graph
@@ -232,9 +235,12 @@ let () =
       | "dbsnp" -> generate_test_dbnsp ~path
       | other -> failwithf "Unknown file-kind to generate"
       end
-    | "test-load" :: fasta :: dbsnp :: more ->
+    | "test-load" :: region_string :: packetize :: fasta :: dbsnp :: more ->
       let memory_stats = List.mem ~set:more "memory-stats" in
-      test_load ~memory_stats ~fasta ~dbsnp
+      let packetization_threshold =
+        Int.of_string packetize |> Option.value_exn ~msg:"packetize argument" in
+      test_load ~region_string ~memory_stats ~fasta ~dbsnp
+        ~packetization_threshold
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Plawireg.Unique_id.test ());
