@@ -424,7 +424,7 @@ module Graph = struct
             let sl = String.length str in
             if position + sl <= e
             then sl - index
-            else sl - index - (position + sl - e)                
+            else 1 + sl - index - (position + sl - e)                
           in
           if length > 0
           then Some (String.sub_exn str ~index ~length)
