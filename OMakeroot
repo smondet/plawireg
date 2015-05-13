@@ -88,10 +88,19 @@ OCAMLFINDFLAGS =
   ##############################################################################
   # Library
   .SUBDIRS: _build/lib
+    PACK_NAME= Plawireg
     OCAMLFINDFLAGS +=
     OCAMLPACKS[] = $(LIB_PACKAGES)
+    OCAML_LINK_FLAGS += -pack
+    OCAMLFLAGS += -for-pack $(PACK_NAME)
 
-    lib: $(OCamlLibrary $(LIB_NAME), $(LIB_MODULES))
+    LIB_CMOS = $(addsuffix .cmo, $(LIB_MODULES))
+    $(PACK_NAME).cmo: $(LIB_CMOS)
+        ocamlc -pack -o $(PACK_NAME).cmo $(OCamlLinkSort $(LIB_CMOS))
+    LIB_CMXS = $(addsuffix .cmx, $(LIB_MODULES))
+    $(PACK_NAME).cmx $(PACK_NAME).o: $(LIB_CMXS)
+        ocamlopt -pack -o $(PACK_NAME).cmx $(OCamlLinkSort $(LIB_CMXS))
+    lib: $(OCamlLibrary $(LIB_NAME), $(PACK_NAME))
 
     .DEFAULT: lib
 
