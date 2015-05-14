@@ -14,6 +14,7 @@ module Error = struct
   | `Graph ce -> Reference_graph.Graph.Error.to_string ce
   | `Cache ce -> Cache.Error.to_string ce
   | `IO _ as e -> IO.error_to_string e
+  | `Failure s -> sprintf "Failure: %s" s
 end
 
 let write_lines ~path l =
@@ -243,6 +244,8 @@ type bench_result = {
   wc_l_executed: Time.t;
   node_count: int option;
   wc_l_vcf: int;
+  wc_l_char_stream_vcf: int;
+  wc_l_char_stream_executed: Time.t;
 } [@@deriving show, yojson]
 let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
   let open Reference_graph in
@@ -252,6 +255,16 @@ let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
       ~on_exn:(fun ~line_number e -> 
           failwithf "exn wc_l: line %d: %s" line_number Exn.(to_string e))
   in
+  let wc_l_char_stream path =
+    Lwt.(
+      let stream = Lwt_io.chars_of_file path in
+      let count = ref 0 in
+      Lwt_stream.iter
+        (function '\n' -> incr count | other -> ())
+        stream
+      >>= fun () ->
+      return (`Ok !count)
+      ) in
   let region = Linear_genome.Region.of_string_exn region_string in
   Graph.create ()
   >>= fun graph ->
@@ -269,6 +282,9 @@ let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
   wc_l dbsnp
   >>= fun wc_l_vcf ->
   let after_wc_l = Time.now () in
+  wc_l_char_stream dbsnp
+  >>= fun wc_l_char_stream_vcf ->
+  let wc_l_char_stream_executed = Time.now () in
   let bench = {
     packetization;
     region; fasta; vcf = dbsnp;
@@ -279,18 +295,61 @@ let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
     wc_l_executed = after_wc_l;
     node_count = (List.nth node_number 0 |> Option.map ~f:snd);
     wc_l_vcf;
+    wc_l_char_stream_executed; wc_l_char_stream_vcf;
   } in
   printf "bench: %s" (show_bench_result bench);
   IO.write_file output ~content:(bench_result_to_yojson bench
                                  |> Yojson.Safe.pretty_to_string ~std:true)
-(*
-  printf "| Packetization | Load FASTA | Load VCF | Count nodes |\n\
-          |---------------|------------|----------|-------------|\n";
-  List.iter benches ~f:(fun (pack,  start, loadref, loadvcf, counts) ->
-      printf "|  %d    |    %f |  %f | %f |\n"
-        pack (loadref -. start) (loadvcf -. loadref) (counts -. loadvcf);
+let benchmarks_summary files =
+  Deferred_list.while_sequential files ~f:(fun path ->
+      IO.read_file path
+      >>= fun content ->
+      begin
+        begin try
+          of_result (Yojson.Safe.from_string content |> bench_result_of_yojson)
+        with e ->
+          fail (sprintf "Warning cannot parse %s: %s" path Exn.(to_string e))
+        end
+        >>< function
+        | `Ok o -> return o
+        | `Error s -> fail (`Failure s)
+      end
+    )
+  >>| List.sort  ~cmp:(fun a b -> compare a.packetization b.packetization)
+  >>= fun benches ->
+  let cell ~title f = title, f in
+  let cells = [
+    cell ~title:"Packetization" (fun s -> sprintf "%d" s.packetization);
+    cell ~title:"FASTA Loading" (fun bench ->
+        sprintf "%s %f"
+          Filename.(basename bench.fasta) (bench.ref_loaded -. bench.start_time));
+    cell ~title:"VCF Loading" (fun bench ->
+        sprintf "%s %f"
+          Filename.(basename bench.vcf) (bench.vcf_loaded -. bench.ref_loaded));
+    cell ~title:"Node Counting" (fun bench ->
+        sprintf "%f"
+          (bench.nodes_counted -. bench.vcf_loaded));
+    cell ~title:"Total Plawireg" (fun bench ->
+        sprintf "%f"
+          (bench.nodes_counted -. bench.start_time));
+    cell ~title:"Wc -l (fold_lines)" (fun bench ->
+        sprintf "%f (%d)"
+          (bench.wc_l_executed -. bench.nodes_counted) bench.wc_l_vcf);
+    cell ~title:"Wc -l (char stream)" (fun bench ->
+        sprintf "%f (%d)"
+          (bench.wc_l_char_stream_executed -. bench.wc_l_executed)
+          bench.wc_l_char_stream_vcf);
+  ] in
+  let rows =
+    List.map benches ~f:(fun bench ->
+        List.map cells ~f:(fun (title, f) -> (title, f bench)))
+  in
+  printf "| %s |\n" (String.concat ~sep:" | " (List.map cells ~f:fst));
+  printf "|-%s-|\n" (String.concat ~sep:"-|-" (List.map cells ~f:(fun (title, _) -> String.map title ~f:(fun _ -> '-'))));
+  List.iter rows ~f:(fun row ->
+      printf "| %s |\n" (List.map ~f:snd row |> String.concat ~sep:" | ")
     );
- *)
+  return ()
 
 let () =
   let to_do =
@@ -311,6 +370,7 @@ let () =
       let packetization =
         Int.of_string packet |> Option.value_exn ~msg:"Packetization to `int`" in
       benchmark ~fasta ~dbsnp:vcf ~region_string ~packetization ~output:json
+    | "bench-report" :: files -> benchmarks_summary files
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Unique_id.test ());
