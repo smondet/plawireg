@@ -230,54 +230,67 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
   print_stats "last one" >>= fun () ->
   return ()
 
-let benchmark ~fasta ~dbsnp ~region_string ~packetizations ~output_file =
+open Internal_pervasives
+type bench_result = {
+  packetization: int;
+  region: Linear_genome.Region.t;
+  fasta: string;
+  vcf: string;
+  start_time: Time.t;
+  ref_loaded: Time.t;
+  vcf_loaded: Time.t;
+  nodes_counted: Time.t;
+  wc_l_executed: Time.t;
+  node_count: int option;
+  wc_l_vcf: int;
+} [@@deriving show, yojson]
+let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
   let open Reference_graph in
-  let open Internal_pervasives in
+  let wc_l path =
+    fold_lines path ~init:0
+      ~f:(fun ~line_number prev line -> return (prev + 1))
+      ~on_exn:(fun ~line_number e -> 
+          failwithf "exn wc_l: line %d: %s" line_number Exn.(to_string e))
+  in
   let region = Linear_genome.Region.of_string_exn region_string in
-  List.fold ~init:(return []) packetizations ~f:(fun prev_m pack ->
-      prev_m >>= fun prev ->
-      Graph.create ()
-      >>= fun graph ->
-      let start = Time.now () in
-      Graph.load_reference graph ~path:fasta ~region
-        ~packetization_threshold:pack
-      >>= fun () ->
-      let after_load_ref = Time.now () in
-      Graph.add_vcf graph ~path:dbsnp ~region
-      >>= fun () ->
-      let after_load_vcf = Time.now () in
-      Graph.count_nodes graph
-      >>= fun counts ->
-      let after_counts = Time.now () in
-      return ((pack, start, after_load_ref, after_load_vcf, after_counts)
-              :: prev))
-  >>| List.rev
-  >>= fun benches ->
-  IO.with_out_channel (`Append_to_file output_file) ~f:begin fun out ->
-    IO.write out (
-      sprintf "### Benchmark %s\n\n\
-               * Region: %s\n\
-               * FASTA: %s\n\
-               * VCF: %s\n\
-               \n"
-        Time.(now () |> to_filename)
-        Linear_genome.Region.(show region)
-        fasta dbsnp
-    )
-    >>= fun () ->
-    IO.write out (
-      sprintf "| Packetization | Load FASTA | Load VCF | Count nodes |\n\
-               |---------------|------------|----------|-------------|\n")
-    >>= fun () ->
-    Deferred_list.while_sequential benches
-      ~f:(fun (pack,  start, loadref, loadvcf, counts) ->
-          IO.write out (
-            sprintf "|  %d    |    %f |  %f | %f |\n"
-              pack (loadref -. start) (loadvcf -. loadref) (counts -. loadvcf))
-        )
-    >>= fun _ ->
-    IO.write out "\n\n\n"
-  end
+  Graph.create ()
+  >>= fun graph ->
+  let start = Time.now () in
+  Graph.load_reference graph ~path:fasta ~region
+    ~packetization_threshold:packetization
+  >>= fun () ->
+  let after_load_ref = Time.now () in
+  Graph.add_vcf graph ~path:dbsnp ~region
+  >>= fun () ->
+  let after_load_vcf = Time.now () in
+  Graph.count_nodes graph
+  >>= fun node_number ->
+  let after_counts = Time.now () in
+  wc_l dbsnp
+  >>= fun wc_l_vcf ->
+  let after_wc_l = Time.now () in
+  let bench = {
+    packetization;
+    region; fasta; vcf = dbsnp;
+    start_time = start;
+    ref_loaded = after_load_ref;
+    vcf_loaded = after_load_vcf;
+    nodes_counted = after_counts;
+    wc_l_executed = after_wc_l;
+    node_count = (List.nth node_number 0 |> Option.map ~f:snd);
+    wc_l_vcf;
+  } in
+  printf "bench: %s" (show_bench_result bench);
+  IO.write_file output ~content:(bench_result_to_yojson bench
+                                 |> Yojson.Safe.pretty_to_string ~std:true)
+(*
+  printf "| Packetization | Load FASTA | Load VCF | Count nodes |\n\
+          |---------------|------------|----------|-------------|\n";
+  List.iter benches ~f:(fun (pack,  start, loadref, loadvcf, counts) ->
+      printf "|  %d    |    %f |  %f | %f |\n"
+        pack (loadref -. start) (loadvcf -. loadref) (counts -. loadvcf);
+    );
+ *)
 
 let () =
   let to_do =
@@ -294,15 +307,13 @@ let () =
         Int.of_string packetize |> Option.value_exn ~msg:"packetize argument" in
       test_load ~region_string ~memory_stats ~fasta ~dbsnp
         ~packetization_threshold
-    | "bench" :: fasta :: vcf :: region_string :: packets :: output_file :: [] ->
-      let packetizations =
-        String.split packets ~on:(`Character ',')
-        |> List.filter_map  ~f:Int.of_string in
-      benchmark ~fasta ~dbsnp:vcf ~region_string 
-        ~packetizations ~output_file
+    | "bench" :: fasta :: vcf :: region_string :: packet :: json :: [] ->
+      let packetization =
+        Int.of_string packet |> Option.value_exn ~msg:"Packetization to `int`" in
+      benchmark ~fasta ~dbsnp:vcf ~region_string ~packetization ~output:json
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
-      printf "- time: %f s\n%!" (Internal_pervasives.Unique_id.test ());
+      printf "- time: %f s\n%!" (Unique_id.test ());
       return ()
     | other ->
       failwithf "Cannot understand: [%s]"

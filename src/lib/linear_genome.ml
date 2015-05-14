@@ -1,7 +1,7 @@
 open Internal_pervasives
 
 module Position = struct
-  type t = {chromosome: string; position: int} [@@deriving show,yojson]
+  type t = {chromosome: string; position: int} [@@deriving show, yojson]
   let create chromosome position = {chromosome; position}
   let add pos loci = {pos with position = pos.position + loci}
   let in_range p chr p1 p2 =
@@ -12,7 +12,7 @@ module Region = struct
   type t = [
     | `Everything
     | `Range of string * int * int
-  ] [@@deriving show,yojson]
+  ] [@@deriving show, yojson]
   let range pos1 pos2 =
     let open Position in
     if pos1.chromosome = pos2.chromosome

@@ -129,21 +129,6 @@ module Graph = struct
     >>= fun sequence ->
     return (node.id, node.kind, sequence)
 
-  let fold_lines path ~on_exn ~init ~f : (_, _) Deferred_result.t  =
-    let stream = Lwt_io.lines_of_file path in
-    let rec loop line_number prev =
-      wrap_deferred ~on_exn:(on_exn ~line_number)
-        (fun () -> Lwt_stream.get stream)
-      >>= begin function
-      | Some s ->
-        (try f ~line_number prev s with e -> fail (on_exn ~line_number e))
-        >>= fun next ->
-        loop (line_number + 1) next
-      | None -> return prev
-      end
-    in
-    loop 1 init
-
   let store_new_sequence t ~sequence =
     if Sequence.length sequence = 0
     then return t.empty_sequence_id
