@@ -1,0 +1,121 @@
+
+include Pvem
+include Pvem_lwt_unix
+include Deferred_result
+include Nonstd
+module String = Sosa.Native_string
+
+let dbg fmt = ksprintf (fun s -> printf "%s\n%!" s) fmt
+let is_babbling =
+  try Sys.getenv "VERBOSE" = "true" with _ -> false
+let babble fmt =
+  ksprintf (fun s ->
+      if is_babbling then dbg "%s" s else ()
+    ) fmt
+
+let failwithf fmt = ksprintf failwith fmt
+
+module Exn = struct
+  let to_string = Printexc.to_string
+end
+module Time = struct
+  type t = float
+  [@@deriving show, yojson]
+  let now () : t = Unix.gettimeofday ()
+  let to_filename f =
+    let open Unix in
+    let tm = gmtime f in
+    sprintf "%04d-%02d-%02d-%02dh%02dm%02ds%03dms-UTC"
+      (tm.tm_year + 1900)
+      (tm.tm_mon + 1)
+      (tm.tm_mday)
+      (tm.tm_hour + 1)
+      (tm.tm_min + 1)
+      (tm.tm_sec)
+      ((f -. (floor f)) *. 1000. |> int_of_float)
+end
+
+
+(** Provide pseudo-unique identifiers. *)
+module Unique_id : sig
+  type t
+  [@@deriving show, yojson]
+  val create: unit -> t
+  val to_string: t -> string
+  val test: unit -> float
+end = struct
+  type t = Int64.t
+  [@@deriving show, yojson]
+
+  let circular_int = ref 0L
+  let create () =
+    (* we take a piece of
+       the mantissa (bits 51 to 0) of the current time
+       and stick an increasing number to its right *)
+    let now = Unix.gettimeofday () in
+    let shift_size = 24 in
+    Int64.(
+      let to_add = !circular_int in
+      let () =
+        circular_int :=
+          rem (add !circular_int 1L) (shift_left 1L (shift_size + 1)) in
+      add
+        (shift_left (bits_of_float now) shift_size)
+        to_add
+    )
+
+  let to_string s = sprintf "0x%Lx" s
+
+  let test () =
+    circular_int := 0L;
+    let start = Unix.gettimeofday () in
+    let first = create () in
+    while !circular_int <> 0L do
+      if create () = first then
+        failwithf "got %s again" (to_string first)
+      else
+        ()
+    done;
+    let the_end = Unix.gettimeofday () in
+    (the_end -. start)
+end
+
+module Pointer: sig
+  type id = Unique_id.t
+  [@@deriving show, yojson]
+  type 'a t
+  [@@deriving show, yojson]
+  val create: id -> 'a t
+  val to_string: 'a t -> string
+  val id: 'a t -> id
+end = struct
+  type id = Unique_id.t
+  [@@deriving show, yojson]
+  type 'a t = {id : id}
+  [@@deriving show, yojson]
+  let create id = {id}
+  let to_string {id} = Unique_id.to_string id
+  let id {id} = id
+end
+
+module Sequence: sig
+  type t (* 1-based pseudo-strings *)
+  [@@deriving show, yojson]
+  val empty: t
+  val of_string_exn: string -> t
+  val to_string: t -> string
+  val length: t -> int
+
+  val split_exn: t -> before:int -> (t * t)
+  (** In Vim: i^M :) *)
+end = struct
+  type t = string
+  [@@deriving show, yojson]
+  let empty = ""
+  let of_string_exn s = s
+  let to_string a = a
+  let length = String.length
+  let split_exn s ~before =
+    (String.sub_exn s ~index:0 ~length:(before - 1),
+     String.sub_exn s ~index:(before - 1) ~length:(String.length s - before +  1))
+end

@@ -3,14 +3,16 @@ module String = Sosa.Native_string
 open Pvem_lwt_unix
 open Deferred_result
 
+open Plawireg
+    
 let failwithf fmt = ksprintf failwith fmt
 
-let verbose = Plawireg.is_babbling
+let verbose = Internal_pervasives.is_babbling
 
 module Error = struct
   let to_string = function
-  | `Graph ce -> Plawireg.Graph.Error.to_string ce
-  | `Cache ce -> Plawireg.Cache.Error.to_string ce
+  | `Graph ce -> Reference_graph.Graph.Error.to_string ce
+  | `Cache ce -> Cache.Error.to_string ce
   | `IO _ as e -> IO.error_to_string e
 end
 
@@ -90,9 +92,10 @@ let generate_test_dbnsp ~path =
 let test_load ~region_string ~memory_stats ~fasta ~dbsnp
     ~packetization_threshold =
   let print_stats msg =
+    let open Internal_pervasives in
     if memory_stats then
       begin
-        printf "\n=== %s %s ===\nGC stats:\n" msg Plawireg.Time.(now () |> to_filename);
+        printf "\n=== %s %s ===\nGC stats:\n" msg Time.(now () |> to_filename);
         Gc.print_stat stdout;
         IO.read_file "/proc/self/status"
         >>= fun status ->
@@ -101,50 +104,51 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
       end
     else
       begin
-        printf "\n=== %s %s ===\n" msg Plawireg.Time.(now () |> to_filename);
+        printf "\n=== %s %s ===\n" msg Time.(now () |> to_filename);
         return ()
       end
   in
-  Plawireg.Graph.create ()
+  let open Reference_graph in
+  Graph.create ()
   >>= fun graph ->
   print_stats "before load_reference" >>= fun () ->
-  let region = Plawireg.Linear_genome.Region.of_string_exn region_string in
-  Plawireg.Graph.load_reference graph ~path:fasta ~region
+  let region = Linear_genome.Region.of_string_exn region_string in
+  Graph.load_reference graph ~path:fasta ~region
     ~packetization_threshold
   >>= fun () ->
   (* exit 0 |> ignore; *)
   print_stats "before add_vcf" >>= fun () ->
-  Plawireg.Graph.add_vcf graph ~path:dbsnp ~region
+  Graph.add_vcf graph ~path:dbsnp ~region
   >>= fun () ->
   print_stats "before count_nodes" >>= fun () ->
-  Plawireg.Graph.count_nodes graph
+  Graph.count_nodes graph
   >>= fun counts ->
   let () =
     printf "\nCounts:\n";
     List.iter  counts (fun (name, count) ->
-        printf "* %s: %d nodes\n" name.Plawireg.Graph.chromosome count
+        printf "* %s: %d nodes\n" name.Graph.chromosome count
       ) in
   begin
     if verbose then
+      let open Internal_pervasives in
       print_stats "before outputting .dot file" >>= fun () ->
       let o = open_out "out.dot" in
       fprintf o "digraph refgraph {\n";
-      Plawireg.Graph.fold graph ~init:false ~f:(fun in_subgraph -> function
-        | `Name { Plawireg.Graph. chromosome; comment } ->
+      Graph.fold graph ~init:false ~f:(fun in_subgraph -> function
+        | `Name { Graph. chromosome; comment } ->
           (if in_subgraph then fprintf o "}\n");
           fprintf o "subgraph cluster%s {" chromosome;
           fprintf o "  label=\"%s (%s)\"" chromosome comment;
           return true
         | `Node node ->
-          let open Plawireg.Node in
-          let id = Plawireg.Unique_id.to_string in
-          let seq = Plawireg.Sequence.to_string in
-          Plawireg.Graph.expand_node graph node
+          let open Node in
+          let id = Unique_id.to_string in
+          let seq = Sequence.to_string in
+          Graph.expand_node graph node
           >>= fun (_, _, sequence) ->
           let shape, comment =
             match node.kind with
-            | `Db_snp comment ->
-              ("box", Plawireg.Variant.to_string comment)
+            | `Db_snp comment -> ("box", Variant.to_string comment)
             | `Reference -> "doubleoctagon", ""
             | `Cosmic cm -> "diamond", cm
           in
@@ -159,11 +163,11 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
                      fontname=\"monospace\",fontsize=18];\n"
             (id node.id) label shape color;
           Array.iter node.next ~f:(fun child ->
-              let cid = Plawireg.Pointer.id  child in
+              let cid = Pointer.id  child in
               fprintf o "N_%s -> N_%s[color=red];\n" (id node.id) (id cid);
             );
           Array.iter node.prev ~f:(fun parent ->
-              let cid = Plawireg.Pointer.id parent in
+              let cid = Pointer.id parent in
               fprintf o "N_%s -> N_%s[color=blue];\n" (id node.id) (id cid);
             );
           return in_subgraph
@@ -177,14 +181,14 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
       print_stats "before first fold"
   end
   >>= fun () ->
-  Plawireg.Graph.fold graph ~init:([]) ~f:(fun prev -> function
-    | `Name n -> return (n.Plawireg.Graph.chromosome :: prev)
+  Graph.fold graph ~init:([]) ~f:(fun prev -> function
+    | `Name n -> return (n.Graph.chromosome :: prev)
     | `Node node ->
-      Plawireg.Graph.expand_node graph node
+      Graph.expand_node graph node
       >>= fun (id, kind, seq) ->
       return (sprintf "%s → %s"
-                (Plawireg.Unique_id.to_string id)
-                (Plawireg.Sequence.to_string seq)
+                (Internal_pervasives.Unique_id.to_string id)
+                (Internal_pervasives.Sequence.to_string seq)
               :: prev)
       (* outline "  %s → %s" *)
       (*   (Plawireg.Unique_id.to_string id)  *)
@@ -201,15 +205,15 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
     end
   in
   let base_counts = Hashtbl.create 42 in
-  Plawireg.Graph.fold graph ~init:"" ~f:(fun name -> function
+  Graph.fold graph ~init:"" ~f:(fun name -> function
     | `Name n ->
-      Hashtbl.add base_counts n.Plawireg.Graph.chromosome (Hashtbl.create 42);
-      return n.Plawireg.Graph.chromosome
+      Hashtbl.add base_counts n.Graph.chromosome (Hashtbl.create 42);
+      return n.Graph.chromosome
     | `Node node ->
-      Plawireg.Graph.expand_node graph node
+      Graph.expand_node graph node
       >>= fun (id, kind, seq) ->
       let () =
-        String.iter (Plawireg.Sequence.to_string seq) ~f:(fun c ->
+        String.iter (Internal_pervasives.Sequence.to_string seq) ~f:(fun c ->
             let ht = Hashtbl.find base_counts name in
             match Hashtbl.find ht c with
             | v -> incr v
@@ -227,21 +231,22 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
   return ()
 
 let benchmark ~fasta ~dbsnp ~region_string ~packetizations ~output_file =
-  let open Plawireg in
+  let open Reference_graph in
+  let open Internal_pervasives in
   let region = Linear_genome.Region.of_string_exn region_string in
   List.fold ~init:(return []) packetizations ~f:(fun prev_m pack ->
       prev_m >>= fun prev ->
       Graph.create ()
       >>= fun graph ->
       let start = Time.now () in
-      Plawireg.Graph.load_reference graph ~path:fasta ~region
+      Graph.load_reference graph ~path:fasta ~region
         ~packetization_threshold:pack
       >>= fun () ->
       let after_load_ref = Time.now () in
-      Plawireg.Graph.add_vcf graph ~path:dbsnp ~region
+      Graph.add_vcf graph ~path:dbsnp ~region
       >>= fun () ->
       let after_load_vcf = Time.now () in
-      Plawireg.Graph.count_nodes graph
+      Graph.count_nodes graph
       >>= fun counts ->
       let after_counts = Time.now () in
       return ((pack, start, after_load_ref, after_load_vcf, after_counts)
@@ -297,7 +302,7 @@ let () =
         ~packetizations ~output_file
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
-      printf "- time: %f s\n%!" (Plawireg.Unique_id.test ());
+      printf "- time: %f s\n%!" (Internal_pervasives.Unique_id.test ());
       return ()
     | other ->
       failwithf "Cannot understand: [%s]"
