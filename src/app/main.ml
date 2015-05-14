@@ -315,10 +315,15 @@ let benchmarks_summary files =
         | `Error s -> fail (`Failure s)
       end
     )
-  >>| List.sort  ~cmp:(fun a b -> compare a.packetization b.packetization)
+  >>| List.sort  ~cmp:(fun a b ->
+      match compare a.region b.region with
+      | 0 -> compare a.packetization b.packetization
+      | different_regions -> different_regions
+    )
   >>= fun benches ->
   let cell ~title f = title, f in
   let cells = [
+    cell ~title:"Region" (fun s -> Linear_genome.Region.show s.region);
     cell ~title:"Packetization" (fun s -> sprintf "%d" s.packetization);
     cell ~title:"FASTA Loading" (fun bench ->
         sprintf "%s %f"
