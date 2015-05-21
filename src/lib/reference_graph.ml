@@ -151,11 +151,12 @@ module Graph = struct
 
 
   let load_reference:
+    ?buffer_size: int ->
     ?packetization_threshold:int ->
     ?region:Linear_genome.Region.t ->
     t ->
     path:string -> (unit, _) Deferred_result.t =
-    fun ?(packetization_threshold = 200) ?(region = `Everything) t ~path ->
+    fun ?buffer_size ?(packetization_threshold = 200) ?(region = `Everything) t ~path ->
       let state =
         object (self)
           val mutable current_node = None
@@ -238,7 +239,7 @@ module Graph = struct
       in
       let open Linear_genome in
       let init = Position.create "" 0 in
-      fold_lines path ~init ~f:(fun ~line_number position line ->
+      fold_lines ?buffer_size path ~init ~f:(fun ~line_number position line ->
           let fasta_event = FASTA.event_of_line line in
           let newpos = FASTA.update_position fasta_event ~position in
           match fasta_event with
@@ -496,11 +497,12 @@ module Graph = struct
 
 
   let add_vcf:
+    ?buffer_size: int ->
     ?region:Linear_genome.Region.t -> t -> path:string ->
     (unit, _) Deferred_result.t =
-    fun ?(region=`Everything) t ~path ->
+    fun ?buffer_size ?(region=`Everything) t ~path ->
       let temp = ref [] in
-      fold_lines path ~init:() ~f:begin fun ~line_number () line ->
+      fold_lines path ?buffer_size ~init:() ~f:begin fun ~line_number () line ->
         match line with
         | comment when String.get comment ~index:0 = Some '#' ->
           babble "Comment: %s" comment;

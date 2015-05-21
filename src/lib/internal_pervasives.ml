@@ -120,8 +120,11 @@ end = struct
      String.sub_exn s ~index:(before - 1) ~length:(String.length s - before +  1))
 end
 
-let fold_lines path ~on_exn ~init ~f : (_, _) Deferred_result.t  =
-  let stream = Lwt_io.lines_of_file path in
+let fold_lines ?buffer_size path ~on_exn ~init ~f : (_, _) Deferred_result.t  =
+  wrap_deferred ~on_exn:(on_exn ~line_number:0)
+    (fun () -> Lwt_io.open_file ~mode:Lwt_io.input ?buffer_size path)
+  >>= fun chan ->
+  let stream = Lwt_io.read_lines chan in
   let rec loop line_number prev =
     wrap_deferred ~on_exn:(on_exn ~line_number)
       (fun () -> Lwt_stream.get stream)

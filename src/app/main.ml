@@ -234,6 +234,7 @@ let test_load ~region_string ~memory_stats ~fasta ~dbsnp
 open Internal_pervasives
 type bench_result = {
   packetization: int;
+  buffer_size: int;
   region: Linear_genome.Region.t;
   fasta: string;
   vcf: string;
@@ -247,17 +248,19 @@ type bench_result = {
   wc_l_char_stream_vcf: int;
   wc_l_char_stream_executed: Time.t;
 } [@@deriving show, yojson]
-let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
+let benchmark ~fasta ~dbsnp ~region_string ~packetization ~buffer_size ~output =
   let open Reference_graph in
   let wc_l path =
-    fold_lines path ~init:0
+    fold_lines ~buffer_size path ~init:0
       ~f:(fun ~line_number prev line -> return (prev + 1))
       ~on_exn:(fun ~line_number e -> 
           failwithf "exn wc_l: line %d: %s" line_number Exn.(to_string e))
   in
   let wc_l_char_stream path =
     Lwt.(
-      let stream = Lwt_io.chars_of_file path in
+      Lwt_io.open_file ~mode:Lwt_io.input ~buffer_size path
+      >>= fun chan ->
+      let stream = Lwt_io.read_chars chan in
       let count = ref 0 in
       Lwt_stream.iter
         (function '\n' -> incr count | other -> ())
@@ -269,11 +272,11 @@ let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
   Graph.create ()
   >>= fun graph ->
   let start = Time.now () in
-  Graph.load_reference graph ~path:fasta ~region
+  Graph.load_reference graph ~buffer_size ~path:fasta ~region
     ~packetization_threshold:packetization
   >>= fun () ->
   let after_load_ref = Time.now () in
-  Graph.add_vcf graph ~path:dbsnp ~region
+  Graph.add_vcf graph ~path:dbsnp ~region ~buffer_size
   >>= fun () ->
   let after_load_vcf = Time.now () in
   Graph.count_nodes graph
@@ -287,6 +290,7 @@ let benchmark ~fasta ~dbsnp ~region_string ~packetization ~output =
   let wc_l_char_stream_executed = Time.now () in
   let bench = {
     packetization;
+    buffer_size;
     region; fasta; vcf = dbsnp;
     start_time = start;
     ref_loaded = after_load_ref;
@@ -325,6 +329,7 @@ let benchmarks_summary files =
   let cells = [
     cell ~title:"Region" (fun s -> Linear_genome.Region.show s.region);
     cell ~title:"Packetization" (fun s -> sprintf "%d" s.packetization);
+    cell ~title:"Input-Buffer-size" (fun s -> sprintf "%d" s.buffer_size);
     cell ~title:"FASTA Loading" (fun bench ->
         sprintf "%s %f"
           Filename.(basename bench.fasta) (bench.ref_loaded -. bench.start_time));
@@ -371,10 +376,13 @@ let () =
         Int.of_string packetize |> Option.value_exn ~msg:"packetize argument" in
       test_load ~region_string ~memory_stats ~fasta ~dbsnp
         ~packetization_threshold
-    | "bench" :: fasta :: vcf :: region_string :: packet :: json :: [] ->
+    | "bench" :: fasta :: vcf :: region_string :: packet :: buf_size :: json :: [] ->
       let packetization =
         Int.of_string packet |> Option.value_exn ~msg:"Packetization to `int`" in
+      let buffer_size =
+        Int.of_string buf_size |> Option.value_exn ~msg:"Buffer-size to `int`" in
       benchmark ~fasta ~dbsnp:vcf ~region_string ~packetization ~output:json
+        ~buffer_size
     | "bench-report" :: files -> benchmarks_summary files
     | "test-uid" :: _ ->
       printf "Test-UID:\n%!";
