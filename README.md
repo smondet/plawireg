@@ -22,15 +22,15 @@ One can generate some very small test data files:
 
 and run some stuff:
 
-    ./plawireg test-load mini-reference.fasta mini-dbsnp.vcf
+    ./plawireg test-load all 6 mini-reference.fasta mini-dbsnp.vcf
     
 You can make things more verbose:
 
-    VERBOSE=true ./plawireg test-load mini-reference.fasta mini-dbsnp.vcf
+    VERBOSE=true ./plawireg test-load all 6 mini-reference.fasta mini-dbsnp.vcf
 
 Or ask for “linux-only” memory-usage stats along the way:
 
-    ./plawireg test-load mini-reference.fasta mini-dbsnp.vcf memory-stats
+    ./plawireg test-load all 6 mini-reference.fasta mini-dbsnp.vcf memory-stats
 
 The test dumps a `out.dot` file that one can observe:
 
