@@ -7,7 +7,7 @@ module Node = struct
   type t = {
     id: Pointer.id;
     kind: [ `Reference | `Db_snp of Variant.t | `Cosmic of string ];
-    sequence: Sequence.t Pointer.t;
+    sequence: Sequence.t;
     next: t Pointer.t array;
     prev: t Pointer.t array;
   }
@@ -33,10 +33,10 @@ module Graph = struct
   type root_key = {chromosome: string; comment: string}
   [@@deriving show, yojson]
   type t = {
-    sequences: Sequence.t Cache.t;
+    (* sequences: Sequence.t Cache.t; *)
     nodes: Node.t Cache.t;
     mutable roots: (root_key * Node.t Pointer.t) list;
-    empty_sequence_id: Sequence.t Pointer.t;
+    (* empty_sequence_id: Sequence.t Pointer.t; *)
   }
   module Error = struct
     let rec to_string = function
@@ -54,12 +54,7 @@ module Graph = struct
 
   let create () =
     let nodes = Cache.create () in
-    let sequences = Cache.create () in
-    let sequence_id = Unique_id.create () in
-    Cache.store sequences ~at:sequence_id ~value:Sequence.empty
-    >>= fun () ->
-    return {sequences; nodes; roots = [];
-            empty_sequence_id = Pointer.create sequence_id}
+    return {nodes; roots = [];}
 
   let chromosome_names t =
     List.map t.roots ~f:(fun ({chromosome; _}, _) -> chromosome)
@@ -125,19 +120,8 @@ module Graph = struct
 
   let expand_node t ~node =
     let open Node in
-    Cache.get t.sequences (Pointer.id node.sequence)
-    >>= fun sequence ->
-    return (node.id, node.kind, sequence)
+    return (node.id, node.kind, node.sequence)
 
-  let store_new_sequence t ~sequence =
-    if Sequence.length sequence = 0
-    then return t.empty_sequence_id
-    else begin
-      let sequence_id = Unique_id.create () in
-      Cache.store t.sequences ~at:sequence_id ~value:sequence
-      >>= fun () ->
-      return (Pointer.create sequence_id)
-    end
 
   let new_node t ~kind  ~sequence ~next ~prev =
     let node_id = Unique_id.create () in
@@ -165,23 +149,21 @@ module Graph = struct
             begin match current_node with
             | None -> return ()
             | Some node ->
-              let full_seq = (String.concat ~sep:"" current_sequence) in
-              store_new_sequence t (Sequence.of_string_exn full_seq)
-              >>= fun sequence ->
+              let sequence = (String.concat ~sep:"" current_sequence) in
               current_sequence <- [];
               babble "finalize: updating node : %s with seq: %s"
-                (Node.to_string node) (full_seq);
-              let updated =  {node with Node.sequence = sequence} in
+                (Node.to_string node) (sequence);
+              let updated =
+                {node with Node.sequence = Sequence.of_string_exn sequence} in
               current_node <- Some updated;
               add_or_update_node t updated
             end
           method finalize =
             self#flush_sequence
             >>= fun () ->
-            store_new_sequence t Sequence.empty
-            >>= fun sequence ->
             let node =
-              new_node t ~kind:`Reference ~sequence ~next:[| |] ~prev:[| |] in
+              new_node t ~kind:`Reference
+                ~sequence:Sequence.empty ~next:[| |] ~prev:[| |] in
             begin match current_node with
             | None -> return [| |]
             | Some current ->
@@ -196,8 +178,7 @@ module Graph = struct
             babble "new_root %s %s" chromosome comment;
             self#finalize
             >>= fun () ->
-            store_new_sequence t Sequence.empty
-            >>= fun sequence ->
+            let sequence = Sequence.empty in
             let first_node =
               new_node t ~kind:`Reference ~sequence ~next:[| |] ~prev:[| |] in
             let second_node =
@@ -219,11 +200,9 @@ module Graph = struct
             if count >= packetization_threshold then (
               self#flush_sequence
               >>= fun () ->
-              store_new_sequence t Sequence.empty
-              >>= fun sequence ->
               let current = Option.value_exn current_node ~msg:"current_node" in
               let node =
-                new_node t ~kind:`Reference ~sequence
+                new_node t ~kind:`Reference ~sequence:Sequence.empty
                   ~next:[| |]
                   ~prev:[| Node.pointer current |] in
               babble "add_dna: updating node : %s with next %s"
@@ -290,8 +269,7 @@ module Graph = struct
           (* last node *)
           return (Some (node, 1, Sequence.empty))
         | Some node ->
-          Cache.get t.sequences (Pointer.id node.Node.sequence)
-          >>= fun seq ->
+          let seq = node.Node.sequence in
           let lgth = Sequence.length seq in
           if current_position + lgth - 1 >=  position
           then return (Some (node, position - current_position + 1, seq))
@@ -337,8 +315,6 @@ module Graph = struct
     let open Node in
     get_parents t ~node:reference_node `Only_reference
     >>= fun parents ->
-    store_new_sequence t ~sequence
-    >>= fun sequence ->
     let new_node =
       let next = [| Node.pointer reference_node |] in
       let prev =
@@ -370,14 +346,10 @@ module Graph = struct
                - replace prev in child of reference_node: (prev
         *)
     let before, after = Sequence.split_exn reference_sequence ~before:index in
-    store_new_sequence t ~sequence:before
-    >>= fun before_sequence ->
-    store_new_sequence t ~sequence:after
-    >>= fun after_sequence ->
     let new_ref_node =
       let next = Array.copy reference_node.Node.next in
       let prev = [| Node.pointer reference_node |] (* + ins_node *) in
-      new_node t ~kind:`Reference ~sequence:after_sequence ~next ~prev
+      new_node t ~kind:`Reference ~sequence:after ~next ~prev
     in
     let open Node in
     babble "split_reference_node: %s (%s / %s) into\n    %s"
@@ -389,7 +361,7 @@ module Graph = struct
     (* Delete old sequence? *)
     add_or_update_node t
       {reference_node with
-       sequence = before_sequence;
+       sequence = before;
        next = [| Node.pointer new_ref_node |]}
     >>= fun () ->
     Array.fold_left reference_node.next ~init:(return ())
@@ -438,8 +410,6 @@ module Graph = struct
       end
     end
     >>= fun joining_node ->
-    store_new_sequence t ~sequence
-    >>= fun sequence ->
     let open Node in
     let new_variant_node =
       let next = [| pointer joining_node |] in
