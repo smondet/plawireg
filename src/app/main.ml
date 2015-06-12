@@ -15,6 +15,7 @@ module Error = struct
   | `Cache ce -> Cache.Error.to_string ce
   | `IO _ as e -> IO.error_to_string e
   | `Failure s -> sprintf "Failure: %s" s
+  | `Server s -> Server.Error.to_string s
 end
 
 let write_lines ~path l =
@@ -388,6 +389,10 @@ let () =
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Unique_id.test ());
       return ()
+    | "server" :: port_str :: [] ->
+      let port =
+        Int.of_string port_str |> Option.value_exn ~msg:"Port-to-string" in
+      Plawireg.Server.start (`TCP port)
     | other ->
       failwithf "Cannot understand: [%s]"
         (List.map other ~f:(sprintf "%S") |> String.concat ~sep:"; ")

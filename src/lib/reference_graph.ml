@@ -29,7 +29,9 @@ module Node = struct
       (of_array "next" next)
       (of_array "prev" prev)
 end
+
 module Graph = struct
+
   type root_key = {chromosome: string; comment: string}
   [@@deriving show, yojson]
   type t = {
