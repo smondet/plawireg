@@ -63,6 +63,9 @@ module Graph = struct
 
   let roots t = t.roots
 
+  let get_node t node_p =
+    Cache.get t.nodes (Pointer.id node_p)
+
   let stream_of_node_pointer t node_p =
     let stack_of_nodes = ref [node_p] in
     let visited_nodes = ref [] in
