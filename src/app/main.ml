@@ -389,10 +389,27 @@ let () =
       printf "Test-UID:\n%!";
       printf "- time: %f s\n%!" (Unique_id.test ());
       return ()
-    | "server" :: port_str :: [] ->
+    | "server" :: port_str :: region_string :: packetize :: fasta :: dbsnp :: [] ->
+      let packetization_threshold =
+        Int.of_string packetize |> Option.value_exn ~msg:"packetize argument" in
       let port =
         Int.of_string port_str |> Option.value_exn ~msg:"Port-to-string" in
-      Plawireg.Server.start (`TCP port)
+      Reference_graph.(
+        Graph.create ()
+        >>= fun graph ->
+        let region =
+          match region_string with
+          | "_" -> `Everything
+          | _ -> Linear_genome.Region.of_string_exn region_string in
+        Graph.load_reference graph ~path:fasta ~region ~packetization_threshold
+        >>= fun () ->
+        Graph.add_vcf graph ~path:dbsnp ~region
+        >>= fun () ->
+        return graph)
+      >>= fun graph ->
+      let state =
+        Plawireg.Server.State.create ~graph () in
+      Plawireg.Server.start ~state (`TCP port)
     | other ->
       failwithf "Cannot understand: [%s]"
         (List.map other ~f:(sprintf "%S") |> String.concat ~sep:"; ")
