@@ -6,6 +6,7 @@ module Protocol = struct
   module Up_message = struct
     type t = [
       | `List_roots
+      | `Get_nodes of Pointer.id list
     ] [@@deriving yojson]
 
     let of_string s =
@@ -20,7 +21,7 @@ module Protocol = struct
 
   module Down_message = struct
     type t = [
-      | `Roots of Reference_graph.Node.t list
+      | `Nodes of Reference_graph.Node.t list
     ]  [@@deriving yojson] 
   end
 
@@ -52,6 +53,12 @@ end
 
 let respond_to_api_call ~state msg =
   match msg with
+  | `Get_nodes ids ->
+    let rg = State.graph state in
+    Deferred_list.while_sequential ids ~f:(fun id ->
+        Reference_graph.Graph.get_node rg (Pointer.create id))
+    >>= fun nodes ->
+    return (`Nodes nodes)
   | `List_roots ->
     let rg = State.graph state in
     let roots = Reference_graph.Graph.roots rg in
@@ -59,7 +66,7 @@ let respond_to_api_call ~state msg =
         Reference_graph.Graph.get_node rg np
       )
     >>= fun nodes ->
-    return (`Roots nodes)
+    return (`Nodes nodes)
 
 
 let dispatch ~state request body =
