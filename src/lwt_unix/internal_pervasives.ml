@@ -1,9 +1,11 @@
 
+include Nonstd
+module String = Sosa.Native_string
+let failwithf fmt = ksprintf failwith fmt
 include Pvem
 include Pvem_lwt_unix
 include Deferred_result
-include Nonstd
-module String = Sosa.Native_string
+module Exn = Plawireg.Internal_pervasives.Exn
 
 let dbg fmt = ksprintf (fun s -> printf "%s\n%!" s) fmt
 let is_babbling =
@@ -13,14 +15,8 @@ let babble fmt =
       if is_babbling then dbg "%s" s else ()
     ) fmt
 
-let failwithf fmt = ksprintf failwith fmt
-
-module Exn = struct
-  let to_string = Printexc.to_string
-end
 module Time = struct
-  type t = float
-  [@@deriving show, yojson]
+  include Plawireg.Internal_pervasives.Time
   let now () : t = Unix.gettimeofday ()
   let to_filename f =
     let open Unix in
@@ -44,8 +40,7 @@ module Unique_id : sig
   val to_string: t -> string
   val test: unit -> float
 end = struct
-  type t = Int64.t
-  [@@deriving show, yojson]
+  include Plawireg.Internal_pervasives.Unique_id
 
   let circular_int = ref 0L
   let create () =

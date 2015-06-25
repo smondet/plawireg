@@ -1,7 +1,7 @@
 open build/OCaml
 DefineCommandVars()
 
-.PHONY: app lwt_unix_lib doc \
+.PHONY: lib app lwt_unix_lib doc \
         install uninstall \
         clean distclean
 
@@ -24,6 +24,11 @@ if $(test -e .git)
 else
   GIT_COMMIT = 'None'
   export
+
+PURE_LIB_NAME = $(PROJECT)
+PURE_LIB_MODULES[] =
+  $(removesuffix $(removesuffix $(basename $(ls src/lib/*.ml))))
+PURE_LIB_PACKAGES = nonstd  pvem sosa ppx_deriving.std ppx_deriving_yojson
 
 LWT_UNIX_LIB_NAME = $(PROJECT)_lwt_unix
 LWT_UNIX_LIB_MODULES[] =
@@ -49,8 +54,10 @@ app: ./plawireg
 .merlin:
   rm -f .merlin
   echo 'S ./src/app/' >> .merlin
+  echo 'S ./src/lib/' >> .merlin
   echo 'S ./src/lwt_unix/' >> .merlin
   echo 'B _build/app/' >> .merlin
+  echo 'B _build/lib' >> .merlin
   echo 'B _build/lwt_unix' >> .merlin
   foreach(m => ..., $(LWT_UNIX_LIB_PACKAGES))
     echo "PKG $(m)" >> .merlin
@@ -82,10 +89,31 @@ OCAMLFINDFLAGS =
 # Sub-directories
 .SUBDIRS: .
   mkdir -p _build/lwt_unix
+  mkdir -p _build/lib
   mkdir -p _build/app
   mkdir -p _build/doc
   vmount(-l, src/lwt_unix/, _build/lwt_unix/)
+  vmount(-l, src/lib/, _build/lib/)
   vmount(-l, src/app/, _build/app/)
+
+  ##############################################################################
+  # Library Plawireg
+  .SUBDIRS: _build/lib
+    PACK_NAME= Plawireg
+    OCAMLFINDFLAGS +=
+    OCAMLPACKS[] = $(PURE_LIB_PACKAGES)
+    OCAML_LINK_FLAGS += -pack
+    OCAMLFLAGS += -for-pack $(PACK_NAME)
+
+    LIB_CMOS = $(addsuffix .cmo, $(PURE_LIB_MODULES))
+    $(PURE_LIB_NAME).cmo: $(LIB_CMOS)
+        ocamlc -pack -o $(PURE_LIB_NAME).cmo $(OCamlLinkSort $(LIB_CMOS))
+    LIB_CMXS = $(addsuffix .cmx, $(PURE_LIB_MODULES))
+    $(PURE_LIB_NAME).cmx $(PURE_LIB_NAME).o: $(LIB_CMXS)
+        ocamlopt -pack -o $(PURE_LIB_NAME).cmx $(OCamlLinkSort $(LIB_CMXS))
+    lib: $(OCamlLibrary $(PURE_LIB_NAME), $(PURE_LIB_NAME))
+
+    .DEFAULT: lib
 
   ##############################################################################
   # Library Plawireg_lwt_unix
@@ -95,6 +123,7 @@ OCAMLFINDFLAGS =
     OCAMLPACKS[] = $(LWT_UNIX_LIB_PACKAGES)
     OCAML_LINK_FLAGS += -pack
     OCAMLFLAGS += -for-pack $(PACK_NAME)
+    OCAMLINCLUDES += $(dir ../lib/)
 
     LIB_CMOS = $(addsuffix .cmo, $(LWT_UNIX_LIB_MODULES))
     $(LWT_UNIX_LIB_NAME).cmo: $(LIB_CMOS)
@@ -110,11 +139,11 @@ OCAMLFINDFLAGS =
   # Application
   .SUBDIRS: _build/app
     OCAMLFINDFLAGS +=
-    OCAML_LIBS = ../lwt_unix/$(LWT_UNIX_LIB_NAME)
-    OCAMLINCLUDES += $(dir ../lwt_unix/)
+    OCAML_LIBS += ../lib/$(PURE_LIB_NAME) ../lwt_unix/$(LWT_UNIX_LIB_NAME)
+    OCAMLINCLUDES += $(dir ../lwt_unix/) $(dir ../lib/)
     OCAMLPACKS[] = $(APP_PACKAGES)
     
-    %.ml: ../lwt_unix/$(LWT_UNIX_LIB_NAME).cmxa
+    %.ml: ../lib/$(PURE_LIB_NAME).cmxa ../lwt_unix/$(LWT_UNIX_LIB_NAME).cmxa
     .DEFAULT: $(OCamlProgram $(APP_NAME), $(APP_MODULES))
 
 
