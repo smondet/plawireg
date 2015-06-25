@@ -3,7 +3,7 @@ module String = Sosa.Native_string
 open Pvem_lwt_unix
 open Deferred_result
 
-open Plawireg
+open Plawireg_lwt_unix
     
 let failwithf fmt = ksprintf failwith fmt
 
@@ -407,9 +407,8 @@ let () =
         >>= fun () ->
         return graph)
       >>= fun graph ->
-      let state =
-        Plawireg.Server.State.create ~graph () in
-      Plawireg.Server.start ~state (`TCP port)
+      let state = Server.State.create ~graph () in
+      Server.start ~state (`TCP port)
     | other ->
       failwithf "Cannot understand: [%s]"
         (List.map other ~f:(sprintf "%S") |> String.concat ~sep:"; ")

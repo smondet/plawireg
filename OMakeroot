@@ -1,7 +1,7 @@
 open build/OCaml
 DefineCommandVars()
 
-.PHONY: app lib doc \
+.PHONY: app lwt_unix_lib doc \
         install uninstall \
         clean distclean
 
@@ -25,17 +25,17 @@ else
   GIT_COMMIT = 'None'
   export
 
-LIB_NAME = $(PROJECT)
-LIB_MODULES[] =
-  $(removesuffix $(removesuffix $(basename $(ls src/lib/*.ml))))
-LIB_PACKAGES = nonstd  pvem  pvem_lwt_unix  sosa \
+LWT_UNIX_LIB_NAME = $(PROJECT)_lwt_unix
+LWT_UNIX_LIB_MODULES[] =
+  $(removesuffix $(removesuffix $(basename $(ls src/lwt_unix/*.ml))))
+LWT_UNIX_LIB_PACKAGES = nonstd  pvem  pvem_lwt_unix  sosa \
   ppx_deriving.std ppx_deriving_yojson \
   cohttp cohttp.lwt
 
 APP_NAME = $(PROJECT)
 APP_MODULES[] =
   $(removesuffix $(removesuffix $(basename $(ls src/app/*.ml))))
-APP_PACKAGES = $(LIB_PACKAGES)
+APP_PACKAGES = $(LWT_UNIX_LIB_PACKAGES)
 
 
 ################################################################################
@@ -49,10 +49,10 @@ app: ./plawireg
 .merlin:
   rm -f .merlin
   echo 'S ./src/app/' >> .merlin
-  echo 'S ./src/lib/' >> .merlin
+  echo 'S ./src/lwt_unix/' >> .merlin
   echo 'B _build/app/' >> .merlin
-  echo 'B _build/lib' >> .merlin
-  foreach(m => ..., $(LIB_PACKAGES))
+  echo 'B _build/lwt_unix' >> .merlin
+  foreach(m => ..., $(LWT_UNIX_LIB_PACKAGES))
     echo "PKG $(m)" >> .merlin
 
 ################################################################################
@@ -81,40 +81,40 @@ OCAMLFINDFLAGS =
 ################################################################################
 # Sub-directories
 .SUBDIRS: .
-  mkdir -p _build/lib
+  mkdir -p _build/lwt_unix
   mkdir -p _build/app
   mkdir -p _build/doc
-  vmount(-l, src/lib/, _build/lib/)
+  vmount(-l, src/lwt_unix/, _build/lwt_unix/)
   vmount(-l, src/app/, _build/app/)
 
   ##############################################################################
-  # Library
-  .SUBDIRS: _build/lib
-    PACK_NAME= Plawireg
+  # Library Plawireg_lwt_unix
+  .SUBDIRS: _build/lwt_unix
+    PACK_NAME= Plawireg_lwt_unix
     OCAMLFINDFLAGS +=
-    OCAMLPACKS[] = $(LIB_PACKAGES)
+    OCAMLPACKS[] = $(LWT_UNIX_LIB_PACKAGES)
     OCAML_LINK_FLAGS += -pack
     OCAMLFLAGS += -for-pack $(PACK_NAME)
 
-    LIB_CMOS = $(addsuffix .cmo, $(LIB_MODULES))
-    $(PACK_NAME).cmo: $(LIB_CMOS)
-        ocamlc -pack -o $(PACK_NAME).cmo $(OCamlLinkSort $(LIB_CMOS))
-    LIB_CMXS = $(addsuffix .cmx, $(LIB_MODULES))
-    $(PACK_NAME).cmx $(PACK_NAME).o: $(LIB_CMXS)
-        ocamlopt -pack -o $(PACK_NAME).cmx $(OCamlLinkSort $(LIB_CMXS))
-    lib: $(OCamlLibrary $(LIB_NAME), $(PACK_NAME))
+    LIB_CMOS = $(addsuffix .cmo, $(LWT_UNIX_LIB_MODULES))
+    $(LWT_UNIX_LIB_NAME).cmo: $(LIB_CMOS)
+        ocamlc -pack -o $(LWT_UNIX_LIB_NAME).cmo $(OCamlLinkSort $(LIB_CMOS))
+    LIB_CMXS = $(addsuffix .cmx, $(LWT_UNIX_LIB_MODULES))
+    $(LWT_UNIX_LIB_NAME).cmx $(LWT_UNIX_LIB_NAME).o: $(LIB_CMXS)
+        ocamlopt -pack -o $(LWT_UNIX_LIB_NAME).cmx $(OCamlLinkSort $(LIB_CMXS))
+    lwt_unix_lib: $(OCamlLibrary $(LWT_UNIX_LIB_NAME), $(LWT_UNIX_LIB_NAME))
 
-    .DEFAULT: lib
+    .DEFAULT: lwt_unix_lib
 
   ##############################################################################
   # Application
   .SUBDIRS: _build/app
     OCAMLFINDFLAGS +=
-    OCAML_LIBS = ../lib/$(PROJECT)
-    OCAMLINCLUDES += $(dir ../lib/)
+    OCAML_LIBS = ../lwt_unix/$(LWT_UNIX_LIB_NAME)
+    OCAMLINCLUDES += $(dir ../lwt_unix/)
     OCAMLPACKS[] = $(APP_PACKAGES)
     
-    %.ml: ../lib/$(PROJECT).cmxa
+    %.ml: ../lwt_unix/$(LWT_UNIX_LIB_NAME).cmxa
     .DEFAULT: $(OCamlProgram $(APP_NAME), $(APP_MODULES))
 
 
@@ -122,11 +122,11 @@ OCAMLFINDFLAGS =
   # Documentation
   .SUBDIRS: _build/doc
 
-    api/index.html: ../lib/$(LIB_NAME).cma
+    api/index.html: ../lwt_unix/$(LWT_UNIX_LIB_NAME).cma
       rm -rf api
       mkdir api
       ocamlfind ocamldoc \
-        -package $(concat \,, $(LIB_PACKAGES)) \
+        -package $(concat \,, $(LWT_UNIX_LIB_PACKAGES)) \
         -charset UTF-8 \
         -d api \
         -t "$(PROJECT) $(VERSION)" \
@@ -136,7 +136,7 @@ OCAMLFINDFLAGS =
         -I ../lib \
         -thread \
         -html \
-        ../src/lib/*.mli ../src/lib/*.ml
+        ../src/lwt_unix/*.mli ../src/lwt_unix/*.ml
 
     doc: api/index.html
 
@@ -152,17 +152,20 @@ if $(not $(defined OPAM_PACKAGE_NAME))
 _build/META: :value: $(VERSION) :value: $(DESCRIPTION)
   echo "description = \"$(DESCRIPTION)\"" > $@
   echo "version = \"$(VERSION)\"" >> $@
-  echo "requires = \"$(LIB_PACKAGES)\"" >> $@
-  echo "archive(byte) = \"$(LIB_NAME).cma\"" >> $@
-  echo "archive(native) = \"$(LIB_NAME).cmxa\"" >> $@
-  echo "archive(native,plugin) = \"$(LIB_NAME).cmxs\"" >> $@
+  echo "package \"lwt_unix\" (" >> $@
+  echo "   requires = \"$(LWT_UNIX_LIB_PACKAGES)\"" >> $@
+  echo "   version = \"$(VERSION)\"" >> $@
+  echo "   archive(byte) = \"$(LWT_UNIX_LIB_NAME).cma\"" >> $@
+  echo "   archive(native) = \"$(LWT_UNIX_LIB_NAME).cmxa\"" >> $@
+  echo "   archive(native,plugin) = \"$(LWT_UNIX_LIB_NAME).cmxs\"" >> $@
+  echo ")" >> $@
 
 install: uninstall _build/META
   ocamlfind install $(PROJECT) \
     _build/META \
-    _build/lib/*.cm[aix] \
-    _build/lib/*.cmx[as] \
-    _build/lib/$(LIB_NAME).a
+    _build/lwt_unix/$(LWT_UNIX_LIB_NAME).cm[aix] \
+    _build/lwt_unix/$(LWT_UNIX_LIB_NAME).cmx[as] \
+    _build/lwt_unix/$(LWT_UNIX_LIB_NAME).a
 
 uninstall:
   ocamlfind remove $(PROJECT)
