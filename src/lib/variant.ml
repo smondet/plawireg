@@ -75,8 +75,6 @@ let of_vcf_row_exn row =
           String.sub_exn alt ~index:common_prefix_length
             ~length:(String.length alt - common_prefix_length) in
         let at = chromosome, position + common_prefix_length in
-        babble "Variant: pos:%d common:%d %S → %S"
-          position common_prefix_length actual_ref actual_alt;
         let fail () =
           failwithf "Unexpected variant ref: %s, alt: %s at %s:%d."
             reference alt chromosome position in

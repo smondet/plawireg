@@ -34,7 +34,7 @@ end
 
 (** Provide pseudo-unique identifiers. *)
 module Unique_id : sig
-  type t
+  type t = Plawireg.Internal_pervasives.Unique_id.t
   [@@deriving show, yojson]
   val create: unit -> t
   val to_string: t -> string
@@ -59,8 +59,6 @@ end = struct
         to_add
     )
 
-  let to_string s = sprintf "0x%Lx" s
-
   let test () =
     circular_int := 0L;
     let start = Unix.gettimeofday () in
@@ -75,45 +73,9 @@ end = struct
     (the_end -. start)
 end
 
-module Pointer: sig
-  type id = Unique_id.t
-  [@@deriving show, yojson]
-  type 'a t
-  [@@deriving show, yojson]
-  val create: id -> 'a t
-  val to_string: 'a t -> string
-  val id: 'a t -> id
-end = struct
-  type id = Unique_id.t
-  [@@deriving show, yojson]
-  type 'a t = {id : id}
-  [@@deriving show, yojson]
-  let create id = {id}
-  let to_string {id} = Unique_id.to_string id
-  let id {id} = id
-end
-
-module Sequence: sig
-  type t (* 1-based pseudo-strings *)
-  [@@deriving show, yojson]
-  val empty: t
-  val of_string_exn: string -> t
-  val to_string: t -> string
-  val length: t -> int
-
-  val split_exn: t -> before:int -> (t * t)
-  (** In Vim: i^M :) *)
-end = struct
-  type t = string
-  [@@deriving show, yojson]
-  let empty = ""
-  let of_string_exn s = s
-  let to_string a = a
-  let length = String.length
-  let split_exn s ~before =
-    (String.sub_exn s ~index:0 ~length:(before - 1),
-     String.sub_exn s ~index:(before - 1) ~length:(String.length s - before +  1))
-end
+module Pointer = Plawireg.Internal_pervasives.Pointer
+module Sequence = Plawireg.Internal_pervasives.Sequence
+                   
 
 let fold_lines ?buffer_size path ~on_exn ~init ~f : (_, _) Deferred_result.t  =
   wrap_deferred ~on_exn:(on_exn ~line_number:0)
