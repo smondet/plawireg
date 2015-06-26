@@ -181,8 +181,12 @@ if $(not $(defined OPAM_PACKAGE_NAME))
 _build/META: :value: $(VERSION) :value: $(DESCRIPTION)
   echo "description = \"$(DESCRIPTION)\"" > $@
   echo "version = \"$(VERSION)\"" >> $@
+  echo "requires = \"$(PURE_LIB_PACKAGES)\"" >> $@
+  echo "archive(byte) = \"$(PURE_LIB_NAME).cma\"" >> $@
+  echo "archive(native) = \"$(PURE_LIB_NAME).cmxa\"" >> $@
+  echo "archive(native,plugin) = \"$(PURE_LIB_NAME).cmxs\"" >> $@
   echo "package \"lwt_unix\" (" >> $@
-  echo "   requires = \"$(LWT_UNIX_LIB_PACKAGES)\"" >> $@
+  echo "   requires = \"$(PURE_LIB_NAME) $(LWT_UNIX_LIB_PACKAGES)\"" >> $@
   echo "   version = \"$(VERSION)\"" >> $@
   echo "   archive(byte) = \"$(LWT_UNIX_LIB_NAME).cma\"" >> $@
   echo "   archive(native) = \"$(LWT_UNIX_LIB_NAME).cmxa\"" >> $@
@@ -192,6 +196,9 @@ _build/META: :value: $(VERSION) :value: $(DESCRIPTION)
 install: uninstall _build/META
   ocamlfind install $(PROJECT) \
     _build/META \
+    _build/lib/$(PURE_LIB_NAME).cm[aix] \
+    _build/lib/$(PURE_LIB_NAME).cmx[as] \
+    _build/lib/$(PURE_LIB_NAME).a \
     _build/lwt_unix/$(LWT_UNIX_LIB_NAME).cm[aix] \
     _build/lwt_unix/$(LWT_UNIX_LIB_NAME).cmx[as] \
     _build/lwt_unix/$(LWT_UNIX_LIB_NAME).a
