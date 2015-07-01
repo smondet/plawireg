@@ -1,0 +1,88 @@
+
+.PHONY: clean distclean
+
+clean:
+  rm -rf _build
+
+distclean: clean
+  rm -rf OMakefile.omc OMakeroot.omc .omakedb .omakedb.lock tools/OMakeLibrary.omc
+
+# Build Parameters
+USE_OCAMLFIND = true
+if $(not $(OCAMLFIND_EXISTS))
+  eprintln(This project requires ocamlfind, but it was not found.)
+  eprintln(You need to install ocamlfind and run "omake --configure".)
+  exit 1
+
+OCAML_LOCAL_LIBS[] =
+
+public.OCamlPackedLibraryOfDir(libname, directory) =
+    mkdir -p _build/$(directory)
+    vmount(-l, $(directory), _build/$(directory))
+    protected.LIB_FILES[] = $(ls $(directory))
+    protected.packname = $(capitalize $(libname))
+    protected.targetname = lib-$(libname)
+    protected.local_deps = $(file $(addprefix _build/,$(addsuffix .cma, $(OCAML_LOCAL_LIBS))))
+    .PHONY: $(targetname)
+    .SUBDIRS: _build/$(directory)
+        OCAMLFLAGS += -for-pack $(packname)
+        OCAMLINCLUDES += $(dirname $(local_deps))
+        %.ml: $(local_deps)
+        protected.LIB_MODULES[] =
+            $(removesuffix $(removesuffix $(basename $(LIB_FILES))))
+        protected.LIB_CMOS = $(addsuffix .cmo, $(LIB_MODULES))
+        $(libname).cmo: $(LIB_CMOS)
+            ocamlc -pack -o $(libname).cmo $(OCamlLinkSort $(LIB_CMOS))
+        protected.LIB_CMXS = $(addsuffix .cmx, $(LIB_MODULES))
+        $(libname).cmx $(libname).o: $(LIB_CMXS)
+            ocamlopt -pack -o $(libname).cmx $(OCamlLinkSort $(LIB_CMXS))
+        $(libname).cmxs: $(libname).cmx
+            ocamlopt -shared -o $@ $(libname).cmx
+        $(targetname): $(OCamlLibrary $(libname), $(libname)) $(libname).cmxs
+        META:  :value: $(VERSION) :value: $(DESCRIPTION) :value: $(OCAMLPACKS) :value: $(OCAML_LOCAL_LIBS)
+            echo "description = \"$(DESCRIPTION)\"" > $@
+            echo "version = \"$(VERSION)\"" >> $@
+            echo "requires = \"$(OCAMLPACKS) $(removesuffix $(basename $(local_deps)))\"" >> $@
+            echo "archive(byte) = \"$(libname).cma\"" >> $@
+            echo "archive(native) = \"$(libname).cmxa\"" >> $@
+            echo "archive(native,plugin) = \"$(libname).cmxs\"" >> $@
+        .PHONY: install-$(targetname) uninstall-$(targetname)
+        install-$(targetname): META $(targetname)
+            ocamlfind install $(libname) META $(libname).cm[aix] $(libname).cmx[as] $(libname).a
+        uninstall-$(targetname):
+            ocamlfind remove $(libname)
+    return $(targetname)
+
+public.OCamlProgramOfDirectory(appname, directory) =
+    mkdir -p _build/$(directory)
+    vmount(-l, $(directory), _build/$(directory))
+    protected.APP_FILES[] = $(ls $(directory))
+    protected.targetname = app-$(appname)
+    protected.local_deps = $(file $(addprefix _build/,$(addsuffix .cma, $(OCAML_LOCAL_LIBS))))
+    .PHONY: $(targetname)
+    protected.best_app = $(if $(NATIVE_ENABLED), $(appname).opt,  $(appname).run)
+    $(appname): _build/$(directory)/$(best_app)
+        cp  _build/$(directory)/$(best_app) $(appname)
+    $(targetname): $(appname)
+    .SUBDIRS: _build/$(directory)
+        OCAMLINCLUDES += $(dirname $(local_deps))
+        OCAML_LIBS += $(removesuffix $(local_deps))
+        %.ml: $(local_deps)
+        protected.APP_MODULES[] =
+            $(removesuffix $(removesuffix $(basename $(APP_FILES))))
+        OCamlProgram($(appname), $(APP_MODULES))
+        .PHONY: install-$(targetname) uninstall-$(targetname)
+        install-$(targetname): $(best_app)
+            cp $(best_app) $(BINDIR)/$(appname)
+        uninstall-$(targetname):
+            rm -f $(BINDIR)/$(appname)
+    return $(targetname)
+
+public.DotMerlin(topdir, packages) =
+    .merlin:
+         rm -f .merlin
+         foreach(d => ..., $(find $(topdir) -d {}))
+              echo "S $(d)" >> $@
+              echo "B _build/$(d)" >> $@
+         foreach(m => ..., $(packages))
+              echo "PKG $(m)" >> $@

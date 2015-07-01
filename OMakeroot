@@ -1,15 +1,8 @@
 open build/OCaml
+open tools/OMakeLibrary.om
 DefineCommandVars()
 
-.PHONY: lib app lwt_unix_lib doc \
-        install uninstall \
-        clean distclean
-
-clean:
-  rm -rf _build
-
-distclean: clean
-  rm -rf OMakefile.omc OMakeroot.omc .omakedb .omakedb.lock
+.PHONY: app doc install uninstall
 
 
 ################################################################################
@@ -26,126 +19,43 @@ else
   export
 
 PURE_LIB_NAME = $(PROJECT)
-PURE_LIB_MODULES[] =
-  $(removesuffix $(removesuffix $(basename $(ls src/lib/*.ml))))
-PURE_LIB_PACKAGES = nonstd  pvem sosa ppx_deriving.std ppx_deriving_yojson
 
 LWT_UNIX_LIB_NAME = $(PROJECT)_lwt_unix
-LWT_UNIX_LIB_MODULES[] =
-  $(removesuffix $(removesuffix $(basename $(ls src/lwt_unix/*.ml))))
 LWT_UNIX_LIB_PACKAGES = nonstd  pvem  pvem_lwt_unix  sosa \
   ppx_deriving.std ppx_deriving_yojson \
   cohttp cohttp.lwt
 
 APP_NAME = $(PROJECT)
-APP_MODULES[] =
-  $(removesuffix $(removesuffix $(basename $(ls src/app/*.ml))))
 APP_PACKAGES = $(LWT_UNIX_LIB_PACKAGES)
-
-
-################################################################################
-# High-level Targets:
-
-app: ./plawireg
-./plawireg: _build/app/plawireg.opt
-    cp _build/app/plawireg.opt ./plawireg
-.DEFAULT: app
-
-.merlin:
-  rm -f .merlin
-  echo 'S ./src/app/' >> .merlin
-  echo 'S ./src/lib/' >> .merlin
-  echo 'S ./src/lwt_unix/' >> .merlin
-  echo 'B _build/app/' >> .merlin
-  echo 'B _build/lib' >> .merlin
-  echo 'B _build/lwt_unix' >> .merlin
-  foreach(m => ..., $(LWT_UNIX_LIB_PACKAGES))
-    echo "PKG $(m)" >> .merlin
-
-################################################################################
-# Build Parameters
-
-################################################################################
-# Build Parameters
-USE_OCAMLFIND = true
-if $(not $(OCAMLFIND_EXISTS))
-  eprintln(This project requires ocamlfind, but it was not found.)
-  eprintln(You need to install ocamlfind and run "omake --configure".)
-  exit 1
 
 NATIVE_ENABLED = $(OCAMLOPT_EXISTS)
 BYTE_ENABLED = $(OCAMLC_EXISTS)
 
 OCAMLFLAGS = -bin-annot -thread -short-paths -safe-string
-OCAMLCFLAGS =
-OCAMLOPTFLAGS =
-OCAML_LINK_FLAGS +=
-OCAML_BYTE_LINK_FLAGS =
-OCAML_NATIVE_LINK_FLAGS =
-OCAMLFINDFLAGS =
 
+section
+    OCAMLPACKS[] = nonstd  pvem sosa ppx_deriving.std ppx_deriving_yojson
+    .DEFAULT: $(OCamlPackedLibraryOfDir plawireg, src/lib)
+section
+    OCAMLPACKS[] = $(LWT_UNIX_LIB_PACKAGES)
+    OCAML_LOCAL_LIBS[] = src/lib/plawireg
+    DESCRIPTION = $(DESCRIPTION) -- Unix library
+    .DEFAULT: $(OCamlPackedLibraryOfDir plawireg_lwt_unix, src/lwt_unix)
+section
+    OCAML_LOCAL_LIBS += src/lib/$(PURE_LIB_NAME) src/lwt_unix/$(LWT_UNIX_LIB_NAME)
+    OCAMLPACKS[] = $(APP_PACKAGES)
+    .DEFAULT: $(OCamlProgramOfDirectory plawireg, $(dir src/app))
+
+
+DotMerlin(./src, $(LWT_UNIX_LIB_PACKAGES))
+
+install: install-lib-plawireg install-lib-plawireg_lwt_unix install-app-plawireg
+uninstall: uninstall-lib-plawireg uninstall-lib-plawireg_lwt_unix uninstall-app-plawireg
 
 ################################################################################
 # Sub-directories
 .SUBDIRS: .
-  mkdir -p _build/lwt_unix
-  mkdir -p _build/lib
-  mkdir -p _build/app
   mkdir -p _build/doc
-  vmount(-l, src/lwt_unix/, _build/lwt_unix/)
-  vmount(-l, src/lib/, _build/lib/)
-  vmount(-l, src/app/, _build/app/)
-
-  ##############################################################################
-  # Library Plawireg
-  .SUBDIRS: _build/lib
-    PACK_NAME= Plawireg
-    OCAMLFINDFLAGS +=
-    OCAMLPACKS[] = $(PURE_LIB_PACKAGES)
-    OCAML_LINK_FLAGS += -pack
-    OCAMLFLAGS += -for-pack $(PACK_NAME)
-
-    LIB_CMOS = $(addsuffix .cmo, $(PURE_LIB_MODULES))
-    $(PURE_LIB_NAME).cmo: $(LIB_CMOS)
-        ocamlc -pack -o $(PURE_LIB_NAME).cmo $(OCamlLinkSort $(LIB_CMOS))
-    LIB_CMXS = $(addsuffix .cmx, $(PURE_LIB_MODULES))
-    $(PURE_LIB_NAME).cmx $(PURE_LIB_NAME).o: $(LIB_CMXS)
-        ocamlopt -pack -o $(PURE_LIB_NAME).cmx $(OCamlLinkSort $(LIB_CMXS))
-    lib: $(OCamlLibrary $(PURE_LIB_NAME), $(PURE_LIB_NAME))
-
-    .DEFAULT: lib
-
-  ##############################################################################
-  # Library Plawireg_lwt_unix
-  .SUBDIRS: _build/lwt_unix
-    PACK_NAME= Plawireg_lwt_unix
-    OCAMLFINDFLAGS +=
-    OCAMLPACKS[] = $(LWT_UNIX_LIB_PACKAGES)
-    OCAML_LINK_FLAGS += -pack
-    OCAMLFLAGS += -for-pack $(PACK_NAME)
-    OCAMLINCLUDES += $(dir ../lib/)
-
-    LIB_CMOS = $(addsuffix .cmo, $(LWT_UNIX_LIB_MODULES))
-    $(LWT_UNIX_LIB_NAME).cmo: $(LIB_CMOS)
-        ocamlc -pack -o $(LWT_UNIX_LIB_NAME).cmo $(OCamlLinkSort $(LIB_CMOS))
-    LIB_CMXS = $(addsuffix .cmx, $(LWT_UNIX_LIB_MODULES))
-    $(LWT_UNIX_LIB_NAME).cmx $(LWT_UNIX_LIB_NAME).o: $(LIB_CMXS)
-        ocamlopt -pack -o $(LWT_UNIX_LIB_NAME).cmx $(OCamlLinkSort $(LIB_CMXS))
-    lwt_unix_lib: $(OCamlLibrary $(LWT_UNIX_LIB_NAME), $(LWT_UNIX_LIB_NAME))
-
-    .DEFAULT: lwt_unix_lib
-
-  ##############################################################################
-  # Application
-  .SUBDIRS: _build/app
-    OCAMLFINDFLAGS +=
-    OCAML_LIBS += ../lib/$(PURE_LIB_NAME) ../lwt_unix/$(LWT_UNIX_LIB_NAME)
-    OCAMLINCLUDES += $(dir ../lwt_unix/) $(dir ../lib/)
-    OCAMLPACKS[] = $(APP_PACKAGES)
-    
-    %.ml: ../lib/$(PURE_LIB_NAME).cmxa ../lwt_unix/$(LWT_UNIX_LIB_NAME).cmxa
-    .DEFAULT: $(OCamlProgram $(APP_NAME), $(APP_MODULES))
-
 
   ##############################################################################
   # Documentation
@@ -169,39 +79,3 @@ OCAMLFINDFLAGS =
 
     doc: api/index.html
 
-
-################################################################################
-# Install and Uninstall
-# - support for findlib and OPAM
-
-if $(not $(defined OPAM_PACKAGE_NAME))
-  OPAM_PACKAGE_NAME = $(PROJECT)
-  export
-
-_build/META: :value: $(VERSION) :value: $(DESCRIPTION)
-  echo "description = \"$(DESCRIPTION)\"" > $@
-  echo "version = \"$(VERSION)\"" >> $@
-  echo "requires = \"$(PURE_LIB_PACKAGES)\"" >> $@
-  echo "archive(byte) = \"$(PURE_LIB_NAME).cma\"" >> $@
-  echo "archive(native) = \"$(PURE_LIB_NAME).cmxa\"" >> $@
-  echo "archive(native,plugin) = \"$(PURE_LIB_NAME).cmxs\"" >> $@
-  echo "package \"lwt_unix\" (" >> $@
-  echo "   requires = \"$(PURE_LIB_NAME) $(LWT_UNIX_LIB_PACKAGES)\"" >> $@
-  echo "   version = \"$(VERSION)\"" >> $@
-  echo "   archive(byte) = \"$(LWT_UNIX_LIB_NAME).cma\"" >> $@
-  echo "   archive(native) = \"$(LWT_UNIX_LIB_NAME).cmxa\"" >> $@
-  echo "   archive(native,plugin) = \"$(LWT_UNIX_LIB_NAME).cmxs\"" >> $@
-  echo ")" >> $@
-
-install: uninstall _build/META
-  ocamlfind install $(PROJECT) \
-    _build/META \
-    _build/lib/$(PURE_LIB_NAME).cm[aix] \
-    _build/lib/$(PURE_LIB_NAME).cmx[as] \
-    _build/lib/$(PURE_LIB_NAME).a \
-    _build/lwt_unix/$(LWT_UNIX_LIB_NAME).cm[aix] \
-    _build/lwt_unix/$(LWT_UNIX_LIB_NAME).cmx[as] \
-    _build/lwt_unix/$(LWT_UNIX_LIB_NAME).a
-
-uninstall:
-  ocamlfind remove $(PROJECT)

@@ -4,3 +4,4 @@ dist/
 /.omakedb.lock
 /OMakeroot.omc
 /_build/
+/tools/OMakeLibrary.omc
