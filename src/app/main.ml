@@ -409,6 +409,12 @@ let () =
       >>= fun graph ->
       let state = Server.State.create ~graph () in
       Server.start ~state (`TCP port)
+    | "info" :: _ ->
+      printf "Version: %S\n" Plawireg.Meta.version;
+      printf "Git-commit: %S\n"
+        (match Plawireg.Meta.git_commit with
+        | None  -> "NONE" | Some c -> c);
+      return ()
     | other ->
       failwithf "Cannot understand: [%s]"
         (List.map other ~f:(sprintf "%S") |> String.concat ~sep:"; ")

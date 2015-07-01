@@ -35,6 +35,10 @@ OCAMLFLAGS = -bin-annot -thread -short-paths -safe-string
 
 section
     OCAMLPACKS[] = nonstd  pvem sosa ppx_deriving.std ppx_deriving_yojson
+    _build/src/lib/meta.ml:
+        echo "let git_commit = $(GIT_COMMIT)" > $@
+        echo "let version = \"$(VERSION)\"" >> $@
+    OCAML_GENERATED_MODULES[] = meta
     .DEFAULT: $(OCamlPackedLibraryOfDir plawireg, src/lib)
 section
     OCAMLPACKS[] = $(LWT_UNIX_LIB_PACKAGES)
