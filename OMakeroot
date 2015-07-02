@@ -28,9 +28,6 @@ LWT_UNIX_LIB_PACKAGES = nonstd  pvem  pvem_lwt_unix  sosa \
 APP_NAME = $(PROJECT)
 APP_PACKAGES = $(LWT_UNIX_LIB_PACKAGES)
 
-NATIVE_ENABLED = $(OCAMLOPT_EXISTS)
-BYTE_ENABLED = $(OCAMLC_EXISTS)
-
 OCAMLFLAGS = -bin-annot -thread -short-paths -safe-string
 
 section

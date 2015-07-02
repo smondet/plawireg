@@ -1,6 +1,9 @@
 
 .PHONY: clean distclean
 
+NATIVE_ENABLED = $(OCAMLOPT_EXISTS)
+BYTE_ENABLED = $(OCAMLC_EXISTS)
+
 clean:
   rm -rf _build
 
@@ -24,20 +27,25 @@ public.OCamlPackedLibraryOfDir(libname, directory) =
     protected.LIB_FILES[] = $(ls $(directory))
     protected.packname = $(capitalize $(libname))
     protected.targetname = lib-$(libname)
-    protected.local_deps = $(file $(addprefix _build/,$(addsuffix .cma, $(OCAML_LOCAL_LIBS))))
+    protected.local_deps = $(file $(addprefix _build/,$(addsuffix .cmi, $(OCAML_LOCAL_LIBS))))
+    echo $(local_deps)
     .PHONY: $(targetname)
     .SUBDIRS: _build/$(directory)
         OCAMLFLAGS += -for-pack $(packname)
         OCAMLINCLUDES += $(dirname $(local_deps))
         %.ml: $(local_deps)
+        %.mli: $(local_deps)
+        %.cmi: $(local_deps)
+        %.cmxa: $(local_deps)
         protected.LIB_MODULES[] =
             $(removesuffix $(removesuffix $(basename $(LIB_FILES))))
             $(OCAML_GENERATED_MODULES)
         protected.LIB_CMOS = $(addsuffix .cmo, $(LIB_MODULES))
-        $(libname).cmo: $(LIB_CMOS)
+        protected.LIB_CMIS = $(addsuffix .cmi, $(LIB_MODULES))
+        $(libname).cmo $(libname).cmi: $(LIB_CMOS) $(LIB_CMIS)
             ocamlc -pack -o $(libname).cmo $(OCamlLinkSort $(LIB_CMOS))
         protected.LIB_CMXS = $(addsuffix .cmx, $(LIB_MODULES))
-        $(libname).cmx $(libname).o: $(LIB_CMXS)
+        $(libname).cmx $(libname).o: $(LIB_CMXS) $(LIB_CMIS)
             ocamlopt -pack -o $(libname).cmx $(OCamlLinkSort $(LIB_CMXS))
         $(libname).cmxs: $(libname).cmx
             ocamlopt -shared -o $@ $(libname).cmx
@@ -61,7 +69,7 @@ public.OCamlProgramOfDirectory(appname, directory) =
     vmount(-l, $(directory), _build/$(directory))
     protected.APP_FILES[] = $(ls $(directory))
     protected.targetname = app-$(appname)
-    protected.local_deps = $(file $(addprefix _build/,$(addsuffix .cma, $(OCAML_LOCAL_LIBS))))
+    protected.local_deps = $(file $(addprefix _build/,$(addsuffix .cmi, $(OCAML_LOCAL_LIBS))))
     .PHONY: $(targetname)
     protected.best_app = $(if $(NATIVE_ENABLED), $(appname).opt,  $(appname).run)
     $(appname): _build/$(directory)/$(best_app)
@@ -71,6 +79,9 @@ public.OCamlProgramOfDirectory(appname, directory) =
         OCAMLINCLUDES += $(dirname $(local_deps))
         OCAML_LIBS += $(removesuffix $(local_deps))
         %.ml: $(local_deps)
+        %.mli: $(local_deps)
+        %.cmi: $(local_deps)
+        %.cmxa: $(local_deps)
         protected.APP_MODULES[] =
             $(removesuffix $(removesuffix $(basename $(APP_FILES))))
             $(OCAML_GENERATED_MODULES)
